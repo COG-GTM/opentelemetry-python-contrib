@@ -1,1 +1,1 @@
-Redact credentials from `process.command_args` in the asyncclick instrumentation
+`opentelemetry-instrumentation-asyncclick`: redact credentials passed on the command line (sensitive option values and URL userinfo) from the `process.command_args` span attribute
