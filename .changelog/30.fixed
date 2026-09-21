@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-anthropic`: cap the supported `anthropic` version below `1.0.0`, which removed request parameters and changed the stream accumulation API the instrumentation depends on
