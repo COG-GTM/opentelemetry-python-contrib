@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-google-genai`: do not pass message content to the configured completion hook when content capturing is disabled (`NO_CONTENT`)
