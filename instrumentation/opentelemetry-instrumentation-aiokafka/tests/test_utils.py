@@ -46,6 +46,12 @@ class TestUtils(IsolatedAsyncioTestCase):
         self.assertEqual(context_getter.get(carrier_list, "key1"), ["val1"])
         self.assertEqual(["key1"], context_getter.keys(carrier_list))
 
+    def test_context_getter_invalid_utf8(self) -> None:
+        context_getter = AIOKafkaContextGetter()
+
+        carrier_list = [("traceparent", b"\xff")]
+        self.assertIsNone(context_getter.get(carrier_list, "traceparent"))
+
     @mock.patch(
         "opentelemetry.instrumentation.aiokafka.utils._extract_bootstrap_servers"
     )

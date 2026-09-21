@@ -71,7 +71,13 @@ class KafkaContextGetter(textmap.Getter):
         for item_key, value in carrier_items:
             if item_key == key:
                 if value is not None:
-                    return [value.decode()]
+                    try:
+                        return [value.decode()]
+                    except UnicodeDecodeError:
+                        _LOG.debug(
+                            "Unable to decode header %s as UTF-8", item_key
+                        )
+                        return None
 
         return None
 

@@ -199,7 +199,13 @@ class AIOKafkaContextGetter(textmap.Getter["HeadersT"]):
         for item_key, value in carrier:
             if item_key == key:
                 if value is not None:
-                    return [value.decode()]
+                    try:
+                        return [value.decode()]
+                    except UnicodeDecodeError:
+                        _LOG.debug(
+                            "Unable to decode header %s as UTF-8", item_key
+                        )
+                        return None
         return None
 
     def keys(self, carrier: HeadersT) -> list[str]:

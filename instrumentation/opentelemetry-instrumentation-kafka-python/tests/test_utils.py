@@ -5,6 +5,7 @@
 from unittest import TestCase, mock
 
 from opentelemetry.instrumentation.kafka.utils import (
+    KafkaContextGetter,
     KafkaPropertiesExtractor,
     _create_consumer_span,
     _get_span_name,
@@ -23,6 +24,12 @@ class TestUtils(TestCase):
         self.args = [self.topic_name]
         self.headers = []
         self.kwargs = {"partition": 0, "headers": self.headers}
+
+    def test_context_getter_invalid_utf8(self) -> None:
+        context_getter = KafkaContextGetter()
+
+        carrier_list = [("traceparent", b"\xff")]
+        self.assertIsNone(context_getter.get(carrier_list, "traceparent"))
 
     @mock.patch(
         "opentelemetry.instrumentation.kafka.utils.KafkaPropertiesExtractor.extract_bootstrap_servers"
