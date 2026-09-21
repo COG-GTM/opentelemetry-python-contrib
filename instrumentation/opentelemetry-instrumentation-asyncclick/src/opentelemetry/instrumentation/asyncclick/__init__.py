@@ -28,6 +28,11 @@ Usage
     if __name__ == "__main__":
         asyncio.run(hello())
 
+The command line recorded in ``process.command_args`` is redacted: values of
+options whose name looks sensitive (for example ``--password``, ``--token`` or
+``--api-key``) and credentials embedded in URL arguments are replaced with
+``REDACTED``.
+
 API
 ---
 """
@@ -35,6 +40,7 @@ API
 from __future__ import annotations
 
 import os
+import re
 import sys
 from functools import partial
 from logging import getLogger
@@ -44,8 +50,10 @@ from typing import (
     Awaitable,
     Callable,
     Collection,
+    Sequence,
     TypeVar,
 )
+from urllib.parse import urlparse, urlunparse
 
 import asyncclick
 from typing_extensions import ParamSpec, Unpack
@@ -85,6 +93,63 @@ _logger = getLogger(__name__)
 T = TypeVar("T")
 P = ParamSpec("P")
 
+_REDACTED = "REDACTED"
+_SENSITIVE_OPTION_RE = re.compile(
+    r"pass(word|wd)?|secret|token|credential|api[-_]?key|^-{1,2}key$", re.I
+)
+
+
+def _is_sensitive_option(arg: str) -> bool:
+    return arg.startswith("-") and bool(_SENSITIVE_OPTION_RE.search(arg))
+
+
+def _remove_url_credentials(value: str) -> str:
+    """Replace the userinfo of a valid URL with the keyword `REDACTED`."""
+    try:
+        parsed = urlparse(value)
+        if parsed.scheme and parsed.netloc and "@" in parsed.netloc:
+            _, _, host = parsed.netloc.rpartition("@")
+            return urlunparse(
+                (
+                    parsed.scheme,
+                    f"{_REDACTED}:{_REDACTED}@{host}",
+                    parsed.path,
+                    parsed.params,
+                    parsed.query,
+                    parsed.fragment,
+                )
+            )
+    except ValueError:
+        pass
+    return value
+
+
+def _redact_argv(argv: Sequence[str]) -> tuple[str, ...]:
+    """Mask credentials passed on the command line.
+
+    Values of options whose name looks sensitive (``--password``, ``--token``,
+    ...) are replaced by ``REDACTED``, and credentials embedded in URL
+    arguments are stripped.
+    """
+    redacted: list[str] = []
+    mask_next = False
+    for arg in argv:
+        if mask_next:
+            redacted.append(_REDACTED)
+            mask_next = False
+        elif arg.startswith("-") and "=" in arg:
+            name, _, value = arg.partition("=")
+            if _is_sensitive_option(name):
+                redacted.append(f"{name}={_REDACTED}")
+            else:
+                redacted.append(f"{name}={_remove_url_credentials(value)}")
+        elif _is_sensitive_option(arg):
+            redacted.append(arg)
+            mask_next = True
+        else:
+            redacted.append(_remove_url_credentials(arg))
+    return tuple(redacted)
+
 
 async def _command_invoke_wrapper(
     wrapped: Callable[P, Awaitable[T]],
@@ -103,7 +168,7 @@ async def _command_invoke_wrapper(
 
     span_name = ctx.info_name
     span_attributes = {
-        PROCESS_COMMAND_ARGS: sys.argv,
+        PROCESS_COMMAND_ARGS: _redact_argv(sys.argv),
         PROCESS_EXECUTABLE_NAME: sys.argv[0],
         PROCESS_EXIT_CODE: 0,
         PROCESS_PID: os.getpid(),
