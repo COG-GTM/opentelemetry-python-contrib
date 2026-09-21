@@ -300,25 +300,38 @@ def _parse_url_query(url: str):
     return path, query_params
 
 
+def redact_query_string(query_string: str) -> str:
+    """Given a url query string, redact sensitive query parameter values"""
+    if not query_string:
+        return query_string
+    try:
+        query_params = parse_qs(query_string)
+    except ValueError:  # an unparsable query string was passed
+        return query_string
+    if not any(param in query_params for param in PARAMS_TO_REDACT):
+        return query_string
+    for param in PARAMS_TO_REDACT:
+        if param in query_params:
+            query_params[param] = ["REDACTED"]
+    return urlencode(query_params, doseq=True)
+
+
 def redact_query_parameters(url: str) -> str:
     """Given a string url, redact sensitive query parameter values"""
     try:
         parsed = urlparse(url)
         if not parsed.query:  # No query parameters to redact
             return url
-        query_params = parse_qs(parsed.query)
-        if not any(param in query_params for param in PARAMS_TO_REDACT):
+        redacted_query = redact_query_string(parsed.query)
+        if redacted_query == parsed.query:
             return url
-        for param in PARAMS_TO_REDACT:
-            if param in query_params:
-                query_params[param] = ["REDACTED"]
         return urlunparse(
             (
                 parsed.scheme,
                 parsed.netloc,
                 parsed.path,
                 parsed.params,
-                urlencode(query_params, doseq=True),
+                redacted_query,
                 parsed.fragment,
             )
         )

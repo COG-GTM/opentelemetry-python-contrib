@@ -827,6 +827,30 @@ class TestWsgiAttributes(unittest.TestCase):
             expected_new.items(),
         )
 
+    def test_request_attributes_redacts_sensitive_query_parameters(self):
+        self.environ["RAW_URI"] = "/download?color=blue&sig=secret"
+        self.environ["PATH_INFO"] = "/download"
+        self.environ["QUERY_STRING"] = "color=blue&sig=secret"
+
+        expected_old = {
+            HTTP_TARGET: "/download?color=blue&sig=REDACTED",
+        }
+        expected_new = {
+            URL_PATH: "/download",
+            URL_QUERY: "color=blue&sig=REDACTED",
+        }
+        self.assertGreaterEqual(
+            otel_wsgi.collect_request_attributes(self.environ).items(),
+            expected_old.items(),
+        )
+        self.assertGreaterEqual(
+            otel_wsgi.collect_request_attributes(
+                self.environ,
+                _StabilityMode.HTTP,
+            ).items(),
+            expected_new.items(),
+        )
+
     def test_request_attributes_with_invalid_request_uri_uses_wsgi_environ(
         self,
     ):
