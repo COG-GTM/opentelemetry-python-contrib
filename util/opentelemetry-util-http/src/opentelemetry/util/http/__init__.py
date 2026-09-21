@@ -203,6 +203,10 @@ def normalise_response_header_name(header: str) -> str:
     return f"http.response.header.{key}"
 
 
+def _is_env_var_enabled(env_var: str) -> bool:
+    return environ.get(env_var, "").strip().lower() in ("true", "1")
+
+
 @overload
 def sanitize_method(method: str) -> str: ...
 
@@ -216,7 +220,9 @@ def sanitize_method(method: str | None) -> str | None:
         return None
     method = method.upper()
     if (
-        environ.get(OTEL_PYTHON_INSTRUMENTATION_HTTP_CAPTURE_ALL_METHODS)
+        _is_env_var_enabled(
+            OTEL_PYTHON_INSTRUMENTATION_HTTP_CAPTURE_ALL_METHODS
+        )
         or
         # Based on https://www.rfc-editor.org/rfc/rfc9110.html#name-methods, https://www.rfc-editor.org/rfc/rfc5789#section-2
         # and https://datatracker.ietf.org/doc/rfc10008/.

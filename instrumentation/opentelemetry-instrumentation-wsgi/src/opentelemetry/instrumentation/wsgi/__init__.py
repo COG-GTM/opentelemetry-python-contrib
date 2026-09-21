@@ -198,7 +198,7 @@ Sanitizing methods
 ******************
 In order to prevent unbound cardinality for HTTP methods by default nonstandard ones are labeled as ``NONSTANDARD``.
 To record all of the names set the environment variable  ``OTEL_PYTHON_INSTRUMENTATION_HTTP_CAPTURE_ALL_METHODS``
-to a value that evaluates to true, e.g. ``1``.
+to ``true`` or ``1``. Any other value, including ``false`` and ``0``, keeps the default behavior.
 
 API
 ---
