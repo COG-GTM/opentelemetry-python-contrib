@@ -435,7 +435,7 @@ class GenAISemanticProcessor(TracingProcessor):
         tracer: Optional[Tracer] = None,
         system_name: str = "openai",
         include_sensitive_data: Optional[bool] = None,
-        content_mode: ContentCaptureMode = ContentCaptureMode.NO_CONTENT,
+        content_mode: Optional[ContentCaptureMode] = None,
         base_url: Optional[str] = None,
         agent_name: Optional[str] = None,
         agent_id: Optional[str] = None,
@@ -456,8 +456,10 @@ class GenAISemanticProcessor(TracingProcessor):
             tracer: Optional OpenTelemetry tracer
             system_name: Provider name (openai/azure.ai.inference/etc.)
             include_sensitive_data: Include model/tool IO when True; when None
-                it follows ``content_mode``. Content capture is opt-in, so the
-                default ``content_mode`` records no model or tool IO.
+                it follows ``content_mode``.
+            content_mode: Where content is recorded. Content capture is
+                opt-in: when omitted it is derived from
+                ``include_sensitive_data`` and defaults to no content.
             base_url: API endpoint for server.address/port
             agent_name: Name of the agent (can be overridden by env var)
             agent_id: ID of the agent (can be overridden by env var)
@@ -467,6 +469,12 @@ class GenAISemanticProcessor(TracingProcessor):
         """
         self._tracer = tracer
         self.system_name = normalize_provider(system_name) or system_name
+        if content_mode is None:
+            content_mode = (
+                ContentCaptureMode.SPAN_AND_EVENT
+                if include_sensitive_data
+                else ContentCaptureMode.NO_CONTENT
+            )
         self._content_mode = content_mode
         self.include_sensitive_data = (
             True if include_sensitive_data is None else include_sensitive_data
