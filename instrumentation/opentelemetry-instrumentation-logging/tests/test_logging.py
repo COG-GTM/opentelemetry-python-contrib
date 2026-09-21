@@ -13,6 +13,7 @@ from opentelemetry.instrumentation.logging import (
     LoggingInstrumentor,
 )
 from opentelemetry.instrumentation.logging.handler import LoggingHandler
+from opentelemetry.sdk.resources import SERVICE_NAME
 from opentelemetry.test.test_base import TestBase
 from opentelemetry.trace import NoOpTracerProvider, ProxyTracer, get_tracer
 
@@ -72,6 +73,9 @@ class TestLoggingInstrumentor(TestBase):
         super().setUp()
         LoggingInstrumentor().instrument()
         self.tracer = get_tracer(__name__)
+        self.service_name = self.tracer_provider.resource.attributes[
+            SERVICE_NAME
+        ]
 
     def tearDown(self):
         super().tearDown()
@@ -86,7 +90,7 @@ class TestLoggingInstrumentor(TestBase):
             self.assertEqual(record.otelSpanID, span_id)
             self.assertEqual(record.otelTraceID, trace_id)
             self.assertEqual(record.otelTraceSampled, trace_sampled)
-            self.assertEqual(record.otelServiceName, "unknown_service")
+            self.assertEqual(record.otelServiceName, self.service_name)
 
     @mock.patch.dict("os.environ", {"OTEL_PYTHON_LOG_CORRELATION": "true"})
     @mock.patch("logging.basicConfig")
@@ -255,7 +259,7 @@ class TestLoggingInstrumentor(TestBase):
                 record = self.caplog.records[0]
                 self.assertEqual(record.otelSpanID, span_id)
                 self.assertEqual(record.otelTraceID, trace_id)
-                self.assertEqual(record.otelServiceName, "unknown_service")
+                self.assertEqual(record.otelServiceName, self.service_name)
                 self.assertEqual(record.otelTraceSampled, trace_sampled)
                 self.assertEqual(
                     record.custom_user_attribute_from_log_hook, "some-value"
