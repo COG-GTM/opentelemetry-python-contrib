@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-asgi`: evaluate `excluded_urls` against the URL built from the trusted `scope["server"]` host instead of the client-supplied `Host` header, which allowed clients to skip instrumentation for any request

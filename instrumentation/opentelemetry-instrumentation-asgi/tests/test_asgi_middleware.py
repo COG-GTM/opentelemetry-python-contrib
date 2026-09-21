@@ -1875,6 +1875,18 @@ class TestAsgiApplication(AsyncAsgiTestBase):
         spans = self.get_finished_spans()
         self.assertGreater(len(spans), 0)
 
+    async def test_excluded_urls_ignores_host_header(self):
+        self.scope["path"] = "/admin"
+        self.scope["headers"].append((b"host", b"test_excluded_urls"))
+        app = otel_asgi.OpenTelemetryMiddleware(
+            simple_asgi, excluded_urls="test_excluded_urls"
+        )
+        self.seed_app(app)
+        await self.send_default_request()
+        await self.get_all_output()
+        spans = self.get_finished_spans()
+        self.assertGreater(len(spans), 0)
+
     async def test_suppress_http_instrumentation(self):
         app = otel_asgi.OpenTelemetryMiddleware(simple_asgi)
 
