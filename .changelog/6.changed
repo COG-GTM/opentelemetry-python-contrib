@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-redis`: redact FT.SEARCH query and document contents unless `capture_search_content=True`

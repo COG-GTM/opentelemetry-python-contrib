@@ -99,6 +99,21 @@ Request/Response Hooks
     client = redis.StrictRedis(host="localhost", port=6379)
     client.get("my-key")
 
+Capture Search Content
+----------------------
+
+For ``FT.SEARCH`` commands the instrumentation records the searched index and the
+number of returned documents. The search query and the contents of the returned
+documents are not captured by default, since they may contain sensitive data. Set
+``capture_search_content=True`` to record the raw query in ``redis.search.query``
+and every returned document field in ``redis.search.xdoc_<index>.<field>``.
+
+.. code:: python
+
+    from opentelemetry.instrumentation.redis import RedisInstrumentor
+
+    RedisInstrumentor().instrument(capture_search_content=True)
+
 Suppress Instrumentation
 ------------------------
 
@@ -222,6 +237,7 @@ def _traced_execute_factory(
     tracer: Tracer,
     request_hook: RequestHook | None = None,
     response_hook: ResponseHook | None = None,
+    capture_search_content: bool = False,
 ):
     sem_conv_opt_in_modes = _get_semconv_opt_in_modes(
         (
@@ -272,7 +288,9 @@ def _traced_execute_factory(
             response = func(*args, **kwargs)
             if span.is_recording():
                 if span.name == "redis.search":
-                    _add_search_attributes(span, response, args)
+                    _add_search_attributes(
+                        span, response, args, capture_search_content
+                    )
             if callable(response_hook):
                 _execute_hook(response_hook, span, instance, response)
             return response
@@ -489,9 +507,10 @@ def _instrument(
     tracer: Tracer,
     request_hook: RequestHook | None = None,
     response_hook: ResponseHook | None = None,
+    capture_search_content: bool = False,
 ):
     _traced_execute_command = _traced_execute_factory(
-        tracer, request_hook, response_hook
+        tracer, request_hook, response_hook, capture_search_content
     )
     _traced_execute_pipeline = _traced_execute_pipeline_factory(
         tracer, request_hook, response_hook
@@ -564,6 +583,7 @@ def _instrument_client(
     tracer: Tracer,
     request_hook: RequestHook | None = None,
     response_hook: ResponseHook | None = None,
+    capture_search_content: bool = False,
 ):
     # first, handle async clients and cluster clients
     _async_traced_execute = _async_traced_execute_factory(
@@ -608,7 +628,7 @@ def _instrument_client(
     # for redis.client.Redis, redis.Cluster and v3.0.0 redis.client.StrictRedis
     # the wrappers are the same
     _traced_execute = _traced_execute_factory(
-        tracer, request_hook, response_hook
+        tracer, request_hook, response_hook, capture_search_content
     )
     _traced_execute_pipeline = _traced_execute_pipeline_factory(
         tracer, request_hook, response_hook
@@ -658,12 +678,17 @@ class RedisInstrumentor(BaseInstrumentor):
         tracer_provider: TracerProvider | None = None,
         request_hook: RequestHook | None = None,
         response_hook: ResponseHook | None = None,
+        capture_search_content: bool = False,
         **kwargs,
     ):
         """Instruments all Redis/StrictRedis/RedisCluster and async client instances.
 
         Args:
             tracer_provider: A TracerProvider, defaults to global.
+            capture_search_content:
+                whether to capture the ``FT.SEARCH`` query and the contents of the
+                returned documents as span attributes. Defaults to ``False``, in which
+                case the query is redacted and document contents are not recorded.
             request_hook:
                 a function with extra user-defined logic to run before performing the request.
 
@@ -683,6 +708,7 @@ class RedisInstrumentor(BaseInstrumentor):
             tracer_provider=tracer_provider,
             request_hook=request_hook,
             response_hook=response_hook,
+            capture_search_content=capture_search_content,
             **kwargs,
         )
 
@@ -694,11 +720,13 @@ class RedisInstrumentor(BaseInstrumentor):
                 ``tracer_provider``: a TracerProvider, defaults to global.
                 ``request_hook``: An optional callback that is invoked right after a span is created.
                 ``response_hook``: An optional callback which is invoked right before the span is finished processing a response.
+                ``capture_search_content``: Whether to capture the ``FT.SEARCH`` query and returned document contents, defaults to False.
         """
         _instrument(
             self._get_tracer(**kwargs),
             request_hook=kwargs.get("request_hook"),
             response_hook=kwargs.get("response_hook"),
+            capture_search_content=kwargs.get("capture_search_content", False),
         )
 
     def _uninstrument(self, **kwargs: Any):
@@ -741,6 +769,7 @@ class RedisInstrumentor(BaseInstrumentor):
         tracer_provider: TracerProvider | None = None,
         request_hook: RequestHook | None = None,
         response_hook: ResponseHook | None = None,
+        capture_search_content: bool = False,
     ):
         """Instrument the provided Redis Client. The client can be sync or async.
         Cluster client is also supported.
@@ -763,6 +792,11 @@ class RedisInstrumentor(BaseInstrumentor):
                 the request is complete.
 
                 The ``args`` represents the response.
+
+            capture_search_content: whether to capture the ``FT.SEARCH`` query and the
+                contents of the returned documents as span attributes. Defaults to
+                ``False``, in which case the query is redacted and document contents
+                are not recorded.
         """
         if not hasattr(client, _INSTRUMENTATION_ATTR):
             setattr(client, _INSTRUMENTATION_ATTR, False)
@@ -772,6 +806,7 @@ class RedisInstrumentor(BaseInstrumentor):
                 RedisInstrumentor._get_tracer(tracer_provider=tracer_provider),
                 request_hook=request_hook,
                 response_hook=response_hook,
+                capture_search_content=capture_search_content,
             )
             setattr(client, _INSTRUMENTATION_ATTR, True)
         else:

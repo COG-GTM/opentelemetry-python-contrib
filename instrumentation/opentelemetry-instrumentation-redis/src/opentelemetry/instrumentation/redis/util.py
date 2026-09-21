@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     )
 
 _FIELD_TYPES = ["NUMERIC", "TEXT", "GEO", "TAG", "VECTOR"]
+_REDACTED_VALUE = "?"
 
 
 def _extract_conn_attributes(
@@ -172,13 +173,19 @@ def _add_create_attributes(span: Span, args: tuple[Any, ...]):
     )
 
 
-def _add_search_attributes(span: Span, response, args):
+def _add_search_attributes(
+    span: Span, response, args, capture_search_content: bool = False
+):
     _set_span_attribute_if_value(
         span, "redis.search.index", _value_or_none(args, 1)
     )
-    _set_span_attribute_if_value(
-        span, "redis.search.query", _value_or_none(args, 2)
-    )
+    query = _value_or_none(args, 2)
+    if query is not None:
+        _set_span_attribute_if_value(
+            span,
+            "redis.search.query",
+            query if capture_search_content else _REDACTED_VALUE,
+        )
     # Parse response from search
     # https://redis.io/docs/latest/commands/ft.search/
     # Response in format:
@@ -189,7 +196,11 @@ def _add_search_attributes(span: Span, response, args):
     _set_span_attribute_if_value(
         span, "redis.search.total", number_of_returned_documents
     )
-    if "NOCONTENT" in args or not number_of_returned_documents:
+    if (
+        not capture_search_content
+        or "NOCONTENT" in args
+        or not number_of_returned_documents
+    ):
         return
     for document_number in range(number_of_returned_documents):
         document_index = _value_or_none(response, 1 + 2 * document_number)
