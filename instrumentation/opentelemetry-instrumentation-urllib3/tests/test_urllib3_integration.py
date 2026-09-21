@@ -515,6 +515,41 @@ class TestURLLib3Instrumentor(TestBase):
         response = self.perform_request(url)
         self.assert_success_span(response, self.HTTP_URL)
 
+    def test_credential_removal_absolute_url(self):
+        url = "http://username:password@mock/status/200"
+
+        pool = urllib3.HTTPConnectionPool("mock")
+        response = pool.urlopen("GET", url, retries=urllib3.Retry.from_int(0))
+
+        self.assert_success_span(
+            response, "http://REDACTED:REDACTED@mock/status/200"
+        )
+
+    def test_signed_query_parameters_redaction(self):
+        response = self.perform_request(
+            self.HTTP_URL + "?AWSAccessKeyId=secret&Signature=sig&foo=bar"
+        )
+
+        self.assert_success_span(
+            response,
+            self.HTTP_URL
+            + "?AWSAccessKeyId=REDACTED&Signature=REDACTED&foo=bar",
+        )
+
+    def test_url_filter_receives_redacted_url(self):
+        filtered_urls = []
+
+        def url_filter(url):
+            filtered_urls.append(url)
+            return url
+
+        URLLib3Instrumentor().uninstrument()
+        URLLib3Instrumentor().instrument(url_filter=url_filter)
+
+        self.perform_request(self.HTTP_URL + "?sig=secret")
+
+        self.assertEqual([self.HTTP_URL + "?sig=REDACTED"], filtered_urls)
+
     def test_hooks(self):
         def request_hook(span, pool, request_info):
             span.update_name("name set from hook")

@@ -234,6 +234,7 @@ from opentelemetry.util.http import (
     normalise_request_header_name,
     normalise_response_header_name,
     parse_excluded_urls,
+    redact_url,
     sanitize_method,
 )
 from opentelemetry.util.http.httplib import set_ip_on_next_http_connection
@@ -569,6 +570,8 @@ def _get_url(
         if _should_append_port(instance.scheme, instance.port):
             url += ":" + str(instance.port)
         url += url_or_path
+
+    url = redact_url(url)
 
     if url_filter:
         return url_filter(url)
