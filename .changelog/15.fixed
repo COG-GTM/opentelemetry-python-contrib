@@ -1,0 +1,1 @@
+Redact credentials from `process.command_args` in the asyncclick instrumentation
