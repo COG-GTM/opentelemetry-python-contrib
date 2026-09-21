@@ -505,8 +505,8 @@ class GenAISemanticProcessor(TracingProcessor):
         self._capture_messages = (
             content_mode.capture_in_span or content_mode.capture_in_event
         )
-        self._capture_system_instructions = True
-        self._capture_tool_definitions = True
+        self._capture_system_instructions = self.include_sensitive_data
+        self._capture_tool_definitions = self.include_sensitive_data
 
         # Span tracking
         self._root_spans: dict[str, OtelSpan] = {}
@@ -1858,8 +1858,11 @@ class GenAISemanticProcessor(TracingProcessor):
             yield GEN_AI_CONVERSATION_ID, span_data.conversation_id
 
         # Agent definitions
-        if self._capture_tool_definitions and hasattr(
-            span_data, "agent_definitions"
+        if (
+            self.include_sensitive_data
+            and self._content_mode.capture_in_span
+            and self._capture_tool_definitions
+            and hasattr(span_data, "agent_definitions")
         ):
             yield (
                 GEN_AI_ORCHESTRATOR_AGENT_DEFINITIONS,
@@ -1867,8 +1870,11 @@ class GenAISemanticProcessor(TracingProcessor):
             )
 
         # System instructions from agent definitions
-        if self._capture_system_instructions and hasattr(
-            span_data, "agent_definitions"
+        if (
+            self.include_sensitive_data
+            and self._content_mode.capture_in_span
+            and self._capture_system_instructions
+            and hasattr(span_data, "agent_definitions")
         ):
             try:
                 defs = span_data.agent_definitions
@@ -1945,8 +1951,11 @@ class GenAISemanticProcessor(TracingProcessor):
             yield GEN_AI_TOOL_DESCRIPTION, span_data.description
 
         # Tool definitions
-        if self._capture_tool_definitions and hasattr(
-            span_data, "tool_definitions"
+        if (
+            self.include_sensitive_data
+            and self._content_mode.capture_in_span
+            and self._capture_tool_definitions
+            and hasattr(span_data, "tool_definitions")
         ):
             yield (
                 GEN_AI_TOOL_DEFINITIONS,
@@ -2031,8 +2040,11 @@ class GenAISemanticProcessor(TracingProcessor):
                     yield GEN_AI_USAGE_OUTPUT_TOKENS, output_tokens
 
             # Tool definitions from response
-            if self._capture_tool_definitions and hasattr(
-                span_data.response, "tools"
+            if (
+                self.include_sensitive_data
+                and self._content_mode.capture_in_span
+                and self._capture_tool_definitions
+                and hasattr(span_data.response, "tools")
             ):
                 yield (
                     GEN_AI_TOOL_DEFINITIONS,
