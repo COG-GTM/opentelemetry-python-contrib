@@ -1,0 +1,1 @@
+`opentelemetry-util-genai`: only set `gen_ai.tool.call.arguments` when content capture is enabled for spans
