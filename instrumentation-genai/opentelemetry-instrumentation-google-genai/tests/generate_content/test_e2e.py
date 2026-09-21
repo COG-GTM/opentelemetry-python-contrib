@@ -373,7 +373,7 @@ def fixture_setup_content_recording(request, semconv_version):
         os.environ[OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT] = str(
             enabled
         )
-    yield
+    yield enabled
     _OpenTelemetrySemanticConventionStability._OTEL_SEMCONV_STABILITY_SIGNAL_MAPPING = orig_dict
 
 
@@ -564,7 +564,7 @@ def test_streaming(generate_content_stream, model, otel_mocker):
 )
 @pytest.mark.vcr
 def test_upload_hook_non_streaming(
-    generate_content, model, otel_mocker: OTelMocker
+    generate_content, model, otel_mocker: OTelMocker, setup_content_recording
 ):
     expected_input = [
         {
@@ -597,11 +597,16 @@ def test_upload_hook_non_streaming(
     event = otel_mocker.get_event_named(
         "gen_ai.client.inference.operation.details"
     )
+    span = otel_mocker.get_span_named(f"generate_content {model}")
+
+    if not setup_content_recording:
+        assert "gen_ai.input.messages_ref" not in event.attributes
+        assert "gen_ai.output.messages_ref" not in span.attributes
+        return
+
     assert_fsspec_equal(
         event.attributes["gen_ai.input.messages_ref"], expected_input
     )
-
-    span = otel_mocker.get_span_named(f"generate_content {model}")
     assert_fsspec_equal(
         span.attributes["gen_ai.output.messages_ref"], expected_output
     )

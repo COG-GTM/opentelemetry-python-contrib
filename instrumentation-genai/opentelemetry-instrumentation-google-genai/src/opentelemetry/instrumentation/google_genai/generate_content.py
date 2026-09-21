@@ -753,15 +753,21 @@ class _GenerateContentInstrumentationHelper:
     ):
         if not self.experimental_sem_convs_enabled:
             return
-        system_instructions = []
-        if system_content := _config_to_system_instruction(config):
-            system_instructions = to_system_instructions(
-                content=transformers.t_contents(system_content)[0]
-            )
-        input_messages = to_input_messages(
-            contents=transformers.t_contents(request)
+        content_capture_enabled = (
+            self._content_recording_enabled != ContentCapturingMode.NO_CONTENT
         )
-        output_messages = to_output_messages(candidates=candidates)
+        system_instructions: list[MessagePart] = []
+        input_messages: list[InputMessage] = []
+        output_messages: list[OutputMessage] = []
+        if content_capture_enabled:
+            if system_content := _config_to_system_instruction(config):
+                system_instructions = to_system_instructions(
+                    content=transformers.t_contents(system_content)[0]
+                )
+            input_messages = to_input_messages(
+                contents=transformers.t_contents(request)
+            )
+            output_messages = to_output_messages(candidates=candidates)
         span = trace.get_current_span()
         event = LogRecord(
             event_name="gen_ai.client.inference.operation.details",
@@ -786,14 +792,15 @@ class _GenerateContentInstrumentationHelper:
             self._thinking_tokens
         )
         tool_definitions = tool_definitions or []
-        self.completion_hook.on_completion(
-            inputs=input_messages,
-            outputs=output_messages,
-            system_instruction=system_instructions,
-            tool_definitions=tool_definitions,
-            span=span,
-            log_record=event,
-        )
+        if content_capture_enabled:
+            self.completion_hook.on_completion(
+                inputs=input_messages,
+                outputs=output_messages,
+                system_instruction=system_instructions,
+                tool_definitions=tool_definitions,
+                span=span,
+                log_record=event,
+            )
         completion_details_attributes = _create_completion_details_attributes(
             input_messages,
             output_messages,
