@@ -41,6 +41,10 @@ if TYPE_CHECKING:
 
 ContextToken: TypeAlias = Token[Context]
 
+# Tool definition fields that carry user/application content and are only emitted when
+# the content capturing mode allows content for the destination.
+_TOOL_DEFINITION_CONTENT_FIELDS = frozenset({"description", "parameters"})
+
 
 class GenAIInvocation(ABC):
     """
@@ -210,15 +214,28 @@ def get_content_attributes(
         )
     )
 
-    def serialize(items: Sequence[Any]) -> Any:
-        dicts = [asdict(item) for item in items]
+    def serialize(
+        items: Sequence[Any], *, drop: frozenset[str] = frozenset()
+    ) -> Any:
+        dicts = [
+            {
+                key: value
+                for key, value in asdict(item).items()
+                if key not in drop
+            }
+            for item in items
+        ]
         return gen_ai_json_dumps(dicts) if for_span else dicts
 
-    # Tool definitions are always captured, the sem conv recommends adding params / description only
-    # when the content capture mode is set..
+    # Tool definitions are always captured, but as the sem conv recommends, params /
+    # description are only added when the content capture mode allows content.
     if mode not in allowed_modes:
         return (
-            {GenAI.GEN_AI_TOOL_DEFINITIONS: serialize(tool_definitions)}
+            {
+                GenAI.GEN_AI_TOOL_DEFINITIONS: serialize(
+                    tool_definitions, drop=_TOOL_DEFINITION_CONTENT_FIELDS
+                )
+            }
             if tool_definitions
             else {}
         )

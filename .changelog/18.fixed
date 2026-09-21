@@ -1,0 +1,1 @@
+`opentelemetry-util-genai`: omit tool definition `description` and `parameters` from `gen_ai.tool.definitions` when content capture is disabled

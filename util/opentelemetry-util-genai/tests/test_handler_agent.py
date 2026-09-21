@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import unittest
 from unittest.mock import patch
 
@@ -378,6 +379,39 @@ class TestAgentInvocationContent(unittest.TestCase):
 
         attrs = self.span_exporter.get_finished_spans()[0].attributes
         assert GenAI.GEN_AI_TOOL_DEFINITIONS in attrs
+        assert json.loads(attrs[GenAI.GEN_AI_TOOL_DEFINITIONS]) == [
+            {
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {"type": "object", "properties": {}},
+                "type": "function",
+            }
+        ]
+
+    @patch(
+        "opentelemetry.util.genai._invocation.get_content_capturing_mode",
+        return_value=ContentCapturingMode.NO_CONTENT,
+    )
+    @patch(
+        "opentelemetry.util.genai._invocation.is_experimental_mode",
+        return_value=True,
+    )
+    def test_tool_definitions_on_span_without_content_capture(
+        self, _mock_exp, _mock_cap
+    ):
+        tool = FunctionToolDefinition(
+            name="get_weather",
+            description="Get the weather",
+            parameters={"type": "object", "properties": {}},
+        )
+        invocation = self.handler.start_invoke_local_agent("openai")
+        invocation.tool_definitions = [tool]
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        assert json.loads(attrs[GenAI.GEN_AI_TOOL_DEFINITIONS]) == [
+            {"name": "get_weather", "type": "function"}
+        ]
 
     @patch(
         "opentelemetry.util.genai._invocation.get_content_capturing_mode",
