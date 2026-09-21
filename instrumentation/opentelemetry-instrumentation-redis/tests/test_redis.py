@@ -21,7 +21,10 @@ from opentelemetry.instrumentation._semconv import (
     OTEL_SEMCONV_STABILITY_OPT_IN,
     _OpenTelemetrySemanticConventionStability,
 )
-from opentelemetry.instrumentation.redis import RedisInstrumentor
+from opentelemetry.instrumentation.redis import (
+    RedisInstrumentor,
+    _traced_execute_factory,
+)
 from opentelemetry.instrumentation.redis.util import (
     _build_span_meta_data_for_pipeline,
 )
@@ -1749,3 +1752,58 @@ class TestBuildSpanMetaDataForPipeline(TestBase):
         self.assertEqual(command_stack, [])
         self.assertEqual(resource, "")
         self.assertEqual(span_name, "redis")
+
+
+class TestRedisSearchAttributes(TestBase):
+    # [total, first_doc_index, first_doc(as a list of field name/value pairs)]
+    SEARCH_RESPONSE = [
+        1,
+        "test:001",
+        ["name", "test", "value", "sensitive-value"],
+    ]
+    SEARCH_ARGS = ("FT.SEARCH", "idx:test", "@name:test")
+
+    def _search(self, capture_search_content: bool, args=None):
+        traced_execute = _traced_execute_factory(
+            self.tracer_provider.get_tracer(__name__),
+            capture_search_content=capture_search_content,
+        )
+        traced_execute(
+            lambda *_args, **_kwargs: self.SEARCH_RESPONSE,
+            redis.Redis(),
+            args if args is not None else self.SEARCH_ARGS,
+            {},
+        )
+        spans = self.memory_exporter.get_finished_spans()
+        self.assertEqual(len(spans), 1)
+        self.assertEqual(spans[0].name, "redis.search")
+        return spans[0].attributes
+
+    def test_search_content_not_captured_by_default(self):
+        attributes = self._search(capture_search_content=False)
+
+        self.assertEqual(attributes["redis.search.index"], "idx:test")
+        self.assertEqual(attributes["redis.search.query"], "?")
+        self.assertEqual(attributes["redis.search.total"], 1)
+        self.assertNotIn("redis.search.xdoc_test:001.name", attributes)
+        self.assertNotIn("redis.search.xdoc_test:001.value", attributes)
+
+    def test_search_content_captured_when_enabled(self):
+        attributes = self._search(capture_search_content=True)
+
+        self.assertEqual(attributes["redis.search.index"], "idx:test")
+        self.assertEqual(attributes["redis.search.query"], "@name:test")
+        self.assertEqual(attributes["redis.search.total"], 1)
+        self.assertEqual(attributes["redis.search.xdoc_test:001.name"], "test")
+        self.assertEqual(
+            attributes["redis.search.xdoc_test:001.value"], "sensitive-value"
+        )
+
+    def test_search_content_not_captured_with_nocontent(self):
+        attributes = self._search(
+            capture_search_content=True,
+            args=self.SEARCH_ARGS + ("NOCONTENT",),
+        )
+
+        self.assertEqual(attributes["redis.search.query"], "@name:test")
+        self.assertNotIn("redis.search.xdoc_test:001.name", attributes)

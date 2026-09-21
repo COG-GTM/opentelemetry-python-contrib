@@ -619,7 +619,10 @@ class TestRedisearchInstrument(TestBase):
         self.redis_client = redis.Redis(port=6379)
         self.redis_client.flushall()
         self.embedding_dim = 256
-        RedisInstrumentor().instrument(tracer_provider=self.tracer_provider)
+        RedisInstrumentor().instrument(
+            tracer_provider=self.tracer_provider,
+            capture_search_content=True,
+        )
         self.prepare_data()
         self.create_index()
 
