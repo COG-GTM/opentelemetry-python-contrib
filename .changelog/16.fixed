@@ -1,0 +1,1 @@
+`opentelemetry-exporter-richconsole`: escape span names, attributes, events, status descriptions and resource attributes so untrusted span data is not parsed as rich console markup, which could raise `MarkupError` and drop the exported batch
