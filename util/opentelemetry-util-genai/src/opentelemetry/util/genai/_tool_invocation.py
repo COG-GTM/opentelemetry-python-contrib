@@ -10,7 +10,11 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.trace import Tracer
-from opentelemetry.util.genai._invocation import Error, GenAIInvocation
+from opentelemetry.util.genai._invocation import (
+    Error,
+    GenAIInvocation,
+    is_content_capture_enabled,
+)
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 
@@ -30,7 +34,9 @@ class ToolInvocation(GenAIInvocation):
     - gen_ai.tool.call.id: Tool call identifier (Recommended if available)
     - gen_ai.tool.type: Type classification - "function", "extension", or "datastore" (Recommended if available)
     - gen_ai.tool.description: Tool description (Recommended if available)
-    - gen_ai.tool.call.arguments: Parameters passed to tool (Opt-In, may contain sensitive data)
+    - gen_ai.tool.call.arguments: Parameters passed to tool (Opt-In, may contain sensitive data);
+      set only when content capture is enabled for spans (experimental mode with
+      SPAN_ONLY or SPAN_AND_EVENT)
     - gen_ai.tool.call.result: Result returned by tool (Opt-In, may contain sensitive data)
     - error.type: Error type if operation failed (Conditionally Required)
     """
@@ -94,7 +100,12 @@ class ToolInvocation(GenAIInvocation):
             (GenAI.GEN_AI_TOOL_CALL_ID, self.tool_call_id),
             (GenAI.GEN_AI_TOOL_TYPE, self.tool_type),
             (GenAI.GEN_AI_TOOL_DESCRIPTION, self.tool_description),
-            (GenAI.GEN_AI_TOOL_CALL_ARGUMENTS, self.arguments),
+            (
+                GenAI.GEN_AI_TOOL_CALL_ARGUMENTS,
+                self.arguments
+                if is_content_capture_enabled(for_span=True)
+                else None,
+            ),
         )
         attributes: dict[str, Any] = {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,

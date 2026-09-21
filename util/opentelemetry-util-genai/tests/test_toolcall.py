@@ -4,6 +4,7 @@
 """Tests for ToolCallRequest and ToolInvocation inheritance structure"""
 
 import pytest
+from tests.test_utils import patch_env_vars
 
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -133,6 +134,42 @@ def test_server_tool_call_in_message():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def _tool_span_attributes(arguments):
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    handler.start_tool("get_weather", arguments=arguments).stop()
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    return spans[0].attributes
+
+
+@patch_env_vars("gen_ai_latest_experimental", "NO_CONTENT", "false")
+def test_tool_arguments_not_captured_without_opt_in():
+    """Tool arguments are Opt-In and must be omitted when content capture is off."""
+    attributes = _tool_span_attributes('{"city": "Paris"}')
+    assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS not in attributes
+
+
+@patch_env_vars("default", "SPAN_ONLY", "false")
+def test_tool_arguments_not_captured_outside_experimental_mode():
+    attributes = _tool_span_attributes('{"city": "Paris"}')
+    assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS not in attributes
+
+
+@patch_env_vars("gen_ai_latest_experimental", "SPAN_ONLY", "false")
+def test_tool_arguments_captured_with_span_content_opt_in():
+    attributes = _tool_span_attributes('{"city": "Paris"}')
+    assert attributes[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == '{"city": "Paris"}'
+
+
+@patch_env_vars("gen_ai_latest_experimental", "EVENT_ONLY", "true")
+def test_tool_arguments_not_captured_on_span_for_event_only():
+    attributes = _tool_span_attributes('{"city": "Paris"}')
+    assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS not in attributes
 
 
 def test_start_tool_passes_sampling_attributes_at_span_creation():
