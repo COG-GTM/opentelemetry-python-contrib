@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-urllib`: stop adding the full request URL as `http.url` on the old semconv client metrics, which bypassed the low-cardinality attribute filter
