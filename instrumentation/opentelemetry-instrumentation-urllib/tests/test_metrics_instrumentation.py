@@ -107,7 +107,6 @@ class TestUrllibMetricsInstrumentation(TestBase):
                     attributes={
                         "http.status_code": int(result.code),
                         "http.method": "GET",
-                        "http.url": str(result.url),
                         "http.flavor": "1.1",
                     },
                 ),
@@ -125,7 +124,6 @@ class TestUrllibMetricsInstrumentation(TestBase):
                     attributes={
                         "http.status_code": int(result.code),
                         "http.method": "GET",
-                        "http.url": str(result.url),
                         "http.flavor": "1.1",
                     },
                 ),
@@ -142,11 +140,28 @@ class TestUrllibMetricsInstrumentation(TestBase):
                     attributes={
                         "http.status_code": int(result.code),
                         "http.method": "GET",
-                        "http.url": str(result.url),
                         "http.flavor": "1.1",
                     },
                 ),
             )
+
+    def test_metric_attributes_do_not_include_url(self):
+        first_url = "http://mock/status/200?user=1"
+        second_url = "http://mock/status/200?user=2"
+        Entry.single_register(Entry.GET, first_url, body=b"Hello!")
+        Entry.single_register(Entry.GET, second_url, body=b"Hello!")
+
+        with request.urlopen(first_url):
+            pass
+        with request.urlopen(second_url):
+            pass
+
+        metrics = self.get_sorted_metrics(SCOPE)
+        self.assertEqual(len(metrics), 3)
+
+        for metric in metrics:
+            self.assertEqual(len(metric.data.data_points), 1)
+            self.assertNotIn("http.url", metric.data.data_points[0].attributes)
 
     def test_basic_metric_new_semconv(self):
         start_time = default_timer()
@@ -241,7 +256,6 @@ class TestUrllibMetricsInstrumentation(TestBase):
                     attributes={
                         "http.status_code": int(result.code),
                         "http.method": "GET",
-                        "http.url": str(result.url),
                         "http.flavor": "1.1",
                     },
                 ),
@@ -259,7 +273,6 @@ class TestUrllibMetricsInstrumentation(TestBase):
                     attributes={
                         "http.status_code": int(result.code),
                         "http.method": "GET",
-                        "http.url": str(result.url),
                         "http.flavor": "1.1",
                     },
                 ),
@@ -276,7 +289,6 @@ class TestUrllibMetricsInstrumentation(TestBase):
                     attributes={
                         "http.status_code": int(result.code),
                         "http.method": "GET",
-                        "http.url": str(result.url),
                         "http.flavor": "1.1",
                     },
                 ),
@@ -359,7 +371,6 @@ class TestUrllibMetricsInstrumentation(TestBase):
                     attributes={
                         "http.status_code": int(result.code),
                         "http.method": "POST",
-                        "http.url": str(result.url),
                         "http.flavor": "1.1",
                     },
                 ),
@@ -377,7 +388,6 @@ class TestUrllibMetricsInstrumentation(TestBase):
                     attributes={
                         "http.status_code": int(result.code),
                         "http.method": "POST",
-                        "http.url": str(result.url),
                         "http.flavor": "1.1",
                     },
                 ),
@@ -394,7 +404,6 @@ class TestUrllibMetricsInstrumentation(TestBase):
                     attributes={
                         "http.status_code": int(result.code),
                         "http.method": "POST",
-                        "http.url": str(result.url),
                         "http.flavor": "1.1",
                     },
                 ),
