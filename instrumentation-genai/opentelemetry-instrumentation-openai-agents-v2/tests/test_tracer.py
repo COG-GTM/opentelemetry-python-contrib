@@ -69,6 +69,11 @@ GEN_AI_OUTPUT_MESSAGES = getattr(
 GEN_AI_TOOL_DEFINITIONS = getattr(
     GenAI, "GEN_AI_TOOL_DEFINITIONS", "gen_ai.tool.definitions"
 )
+GEN_AI_ORCHESTRATOR_AGENT_DEFINITIONS = getattr(
+    GenAI,
+    "GEN_AI_ORCHESTRATOR_AGENT_DEFINITIONS",
+    "gen_ai.orchestrator.agent.definitions",
+)
 
 
 def _instrument_with_provider(**instrument_kwargs):
@@ -559,3 +564,93 @@ def test_response_span_records_response_attributes():
     finally:
         instrumentor.uninstrument()
         exporter.clear()
+
+
+def _agent_span_data_with_definitions() -> Any:
+    return SimpleNamespace(
+        name="support_bot",
+        agent_definitions=[
+            {
+                "name": "support_bot",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are a helpful assistant.",
+                    }
+                ],
+            }
+        ],
+    )
+
+
+def test_agent_definitions_captured_when_content_enabled():
+    processor = GenAISemanticProcessor(metrics_enabled=False)
+    attributes = dict(
+        processor._get_attributes_from_agent_span_data(
+            _agent_span_data_with_definitions()
+        )
+    )
+
+    assert GEN_AI_ORCHESTRATOR_AGENT_DEFINITIONS in attributes
+    assert json.loads(attributes[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS]) == [
+        {"type": "text", "content": "You are a helpful assistant."}
+    ]
+
+
+def test_agent_definitions_not_captured_when_content_disabled():
+    processor = GenAISemanticProcessor(
+        include_sensitive_data=False, metrics_enabled=False
+    )
+    attributes = dict(
+        processor._get_attributes_from_agent_span_data(
+            _agent_span_data_with_definitions()
+        )
+    )
+
+    assert GEN_AI_ORCHESTRATOR_AGENT_DEFINITIONS not in attributes
+    assert GenAI.GEN_AI_SYSTEM_INSTRUCTIONS not in attributes
+
+
+def test_function_tool_definitions_not_captured_when_content_disabled():
+    span_data = SimpleNamespace(
+        name="get_current_weather",
+        tool_definitions=[{"name": "get_current_weather"}],
+    )
+
+    enabled = dict(
+        GenAISemanticProcessor(
+            metrics_enabled=False
+        )._get_attributes_from_function_span_data(span_data, ContentPayload())
+    )
+    disabled = dict(
+        GenAISemanticProcessor(
+            include_sensitive_data=False, metrics_enabled=False
+        )._get_attributes_from_function_span_data(span_data, ContentPayload())
+    )
+
+    assert GEN_AI_TOOL_DEFINITIONS in enabled
+    assert GEN_AI_TOOL_DEFINITIONS not in disabled
+
+
+def test_response_tool_definitions_not_captured_when_content_disabled():
+    span_data = SimpleNamespace(
+        response=SimpleNamespace(
+            id="resp-123",
+            model="gpt-4o-mini",
+            tools=[SimpleNamespace(to_dict=lambda: {"name": "weather"})],
+        )
+    )
+
+    enabled = dict(
+        GenAISemanticProcessor(
+            metrics_enabled=False
+        )._get_attributes_from_response_span_data(span_data, ContentPayload())
+    )
+    disabled = dict(
+        GenAISemanticProcessor(
+            include_sensitive_data=False, metrics_enabled=False
+        )._get_attributes_from_response_span_data(span_data, ContentPayload())
+    )
+
+    assert GEN_AI_TOOL_DEFINITIONS in enabled
+    assert GEN_AI_TOOL_DEFINITIONS not in disabled
