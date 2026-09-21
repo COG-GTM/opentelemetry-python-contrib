@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-aiokafka`, `opentelemetry-instrumentation-kafka-python`, `opentelemetry-instrumentation-confluent-kafka`: skip Kafka headers whose value is not valid UTF-8 in the trace context getters instead of raising `UnicodeDecodeError` out of the consumer
