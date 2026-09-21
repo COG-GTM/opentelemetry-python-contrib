@@ -12,7 +12,10 @@ import asyncclick
 import asyncclick.testing
 from asyncclick.testing import CliRunner
 
-from opentelemetry.instrumentation.asyncclick import AsyncClickInstrumentor
+from opentelemetry.instrumentation.asyncclick import (
+    AsyncClickInstrumentor,
+    _redact_argv,
+)
 from opentelemetry.test.test_base import TestBase
 from opentelemetry.trace import SpanKind
 from opentelemetry.trace.status import StatusCode
@@ -38,6 +41,63 @@ def run_asyncclick_command_test(
         return await runner.invoke(command, args, **kwargs)
 
     return asyncio.run(_run())
+
+
+class RedactArgvTestCase(TestBase):
+    def test_plain_arguments_are_preserved(self):
+        self.assertEqual(
+            _redact_argv(["command.py", "sub", "--opt", "value"]),
+            ("command.py", "sub", "--opt", "value"),
+        )
+
+    def test_sensitive_option_values_are_masked(self):
+        for option in (
+            "--password",
+            "--passwd",
+            "--pass",
+            "--token",
+            "--client-secret",
+            "--api-key",
+            "--key",
+            "--credentials",
+        ):
+            with self.subTest(option=option):
+                self.assertEqual(
+                    _redact_argv(["command.py", option, "s3cret"]),
+                    ("command.py", option, "REDACTED"),
+                )
+                self.assertEqual(
+                    _redact_argv(["command.py", f"{option}=s3cret"]),
+                    ("command.py", f"{option}=REDACTED"),
+                )
+
+    def test_non_sensitive_option_named_like_a_secret_word(self):
+        self.assertEqual(
+            _redact_argv(["command.py", "--monkey", "value"]),
+            ("command.py", "--monkey", "value"),
+        )
+
+    def test_url_credentials_are_removed(self):
+        self.assertEqual(
+            _redact_argv(
+                [
+                    "command.py",
+                    "postgres://user:pw@host:5432/db",
+                    "--dsn=https://user:pw@example.com/path?q=1",
+                    "https://example.com/path",
+                ]
+            ),
+            (
+                "command.py",
+                "postgres://REDACTED:REDACTED@host:5432/db",
+                "--dsn=https://REDACTED:REDACTED@example.com/path?q=1",
+                "https://example.com/path",
+            ),
+        )
+
+    def test_returns_strings(self):
+        redacted = _redact_argv(["command.py", "--token", "abc"])
+        self.assertTrue(all(isinstance(arg, str) for arg in redacted))
 
 
 class ClickTestCase(TestBase, IsolatedAsyncioTestCase):
@@ -121,6 +181,43 @@ class ClickTestCase(TestBase, IsolatedAsyncioTestCase):
                 "process.exit.code": 0,
                 "process.pid": os.getpid(),
             },
+        )
+
+    @mock.patch(
+        "sys.argv",
+        [
+            "command.py",
+            "--password",
+            "hunter2",
+            "--db-url=postgres://user:pw@host/db",
+        ],
+    )
+    def test_cli_command_wrapping_redacts_credentials(self):
+        @asyncclick.command()
+        @asyncclick.option("--password")
+        @asyncclick.option("--db-url")
+        async def command(password: str, db_url: str) -> None:
+            pass
+
+        result = run_asyncclick_command_test(
+            command,
+            [
+                "--password",
+                "hunter2",
+                "--db-url=postgres://user:pw@host/db",
+            ],
+        )
+        self.assertEqual(result.exit_code, 0)
+
+        (span,) = self.memory_exporter.get_finished_spans()
+        self.assertEqual(
+            span.attributes["process.command_args"],
+            (
+                "command.py",
+                "--password",
+                "REDACTED",
+                "--db-url=postgres://REDACTED:REDACTED@host/db",
+            ),
         )
 
     @mock.patch("sys.argv", ["command-raises.py"])
