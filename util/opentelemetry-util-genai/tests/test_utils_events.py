@@ -19,7 +19,7 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.semconv.attributes import error_attributes
 from opentelemetry.util.genai.handler import get_telemetry_handler
-from opentelemetry.util.genai.types import Error
+from opentelemetry.util.genai.types import Error, FunctionToolDefinition
 
 from .test_utils import (
     _create_input_message,
@@ -189,6 +189,34 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         self.assertIsNotNone(span.context)
         self.assertEqual(log_record.trace_id, span.context.trace_id)
         self.assertEqual(log_record.span_id, span.context.span_id)
+
+    @patch_env_vars(
+        stability_mode="gen_ai_latest_experimental",
+        content_capturing="SPAN_ONLY",
+        emit_event="true",
+    )
+    def test_event_tool_definitions_omit_content_when_not_captured(self):
+        invocation = self.telemetry_handler.start_inference(
+            "test-provider", request_model="tool-model"
+        )
+        invocation.tool_definitions = [
+            FunctionToolDefinition(
+                name="get_weather",
+                description="Get the weather",
+                parameters={"type": "object", "properties": {}},
+            )
+        ]
+        invocation.stop()
+
+        log_record = self.log_exporter.get_finished_logs()[0].log_record
+        tool_definition = _normalize_to_dict(
+            _normalize_to_list(
+                log_record.attributes[GenAI.GEN_AI_TOOL_DEFINITIONS]
+            )[0]
+        )
+        self.assertEqual(
+            tool_definition, {"name": "get_weather", "type": "function"}
+        )
 
     @patch_env_vars(
         stability_mode="gen_ai_latest_experimental",
