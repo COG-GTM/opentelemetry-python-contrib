@@ -71,8 +71,25 @@ _active_requests_count_attrs = {
 PARAMS_TO_REDACT = ["AWSAccessKeyId", "Signature", "sig", "X-Goog-Signature"]
 
 
+def _strip_query_and_fragment(url: str) -> str:
+    """Return ``url`` without its query string and fragment."""
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return url
+    if not parsed.query and not parsed.fragment:
+        return url
+    return urlunparse(parsed._replace(query="", fragment=""))
+
+
 class ExcludeList:
-    """Class to exclude certain paths (given as a list of regexes) from tracing requests"""
+    """Class to exclude certain paths (given as a list of regexes) from tracing requests
+
+    The patterns are unanchored substring matches, so operators should anchor
+    them (e.g. ``^/health$``) when an exact match is wanted. The query string
+    and fragment are stripped before matching so that they cannot be used to
+    force a match on an otherwise traced URL.
+    """
 
     def __init__(self, excluded_urls: Iterable[str]):
         self._excluded_urls = excluded_urls
@@ -80,7 +97,10 @@ class ExcludeList:
             self._regex = re_compile("|".join(excluded_urls))
 
     def url_disabled(self, url: str) -> bool:
-        return bool(self._excluded_urls and search(self._regex, url))
+        return bool(
+            self._excluded_urls
+            and search(self._regex, _strip_query_and_fragment(url))
+        )
 
 
 class SanitizeValue:
