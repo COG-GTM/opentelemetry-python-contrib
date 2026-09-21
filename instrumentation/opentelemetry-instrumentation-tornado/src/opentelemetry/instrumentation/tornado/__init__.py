@@ -138,6 +138,21 @@ The value of the attribute will be single item list containing all the header va
 Example of the added span attribute,
 ``http.response.header.custom_response_header = ["<value1>,<value2>"]``
 
+Sanitizing headers
+******************
+In order to prevent storing sensitive data such as personally identifiable information (PII), session keys, passwords,
+etc, set the environment variable ``OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS``
+to a comma delimited list of HTTP header names to be sanitized.
+
+Regexes may be used, and all header names will be matched in a case-insensitive manner.
+
+For example using the environment variable,
+::
+
+    export OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS=".*session.*,set-cookie"
+
+will replace the value of headers such as ``session-id`` and ``set-cookie`` with ``[REDACTED]`` in the span.
+
 Note:
     Environment variable names to capture http headers are still experimental, and thus are subject to change.
 
@@ -223,9 +238,11 @@ from opentelemetry.semconv.attributes.url_attributes import (
 )
 from opentelemetry.semconv.metrics import MetricInstruments
 from opentelemetry.util.http import (
+    OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS,
     OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST,
     OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE,
     _parse_url_query,
+    get_custom_header_attributes,
     get_custom_headers,
     get_excluded_urls,
     get_traced_request_attrs,
@@ -639,29 +656,29 @@ def _log_exception(
 
 
 def _collect_custom_request_headers_attributes(request_headers):
-    custom_request_headers_name = get_custom_headers(
-        OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST
+    return get_custom_header_attributes(
+        request_headers,
+        get_custom_headers(
+            OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST
+        ),
+        get_custom_headers(
+            OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS
+        ),
+        normalise_request_header_name,
     )
-    attributes = {}
-    for header_name in custom_request_headers_name:
-        header_values = request_headers.get(header_name)
-        if header_values:
-            key = normalise_request_header_name(header_name.lower())
-            attributes[key] = [header_values]
-    return attributes
 
 
 def _collect_custom_response_headers_attributes(response_headers):
-    custom_response_headers_name = get_custom_headers(
-        OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE
+    return get_custom_header_attributes(
+        response_headers,
+        get_custom_headers(
+            OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE
+        ),
+        get_custom_headers(
+            OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS
+        ),
+        normalise_response_header_name,
     )
-    attributes = {}
-    for header_name in custom_response_headers_name:
-        header_values = response_headers.get(header_name)
-        if header_values:
-            key = normalise_response_header_name(header_name.lower())
-            attributes[key] = [header_values]
-    return attributes
 
 
 def _get_attributes_from_request(request, sem_conv_opt_in_mode):

@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-tornado`: honour `OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS` when capturing request and response headers so sensitive header values are redacted
