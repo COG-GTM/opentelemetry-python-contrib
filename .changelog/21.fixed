@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-asgi`, `opentelemetry-instrumentation-wsgi`: redact sensitive query parameters in the `url.query` and `http.target` attributes, matching the redaction already applied to `http.url`
