@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
+- Make GenAI content capture opt-in: message content, system instructions, and
+  tool call arguments/results are no longer recorded unless
+  `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` (or the
+  `capture_message_content` argument) explicitly enables it.
 - Align AgentSpanData test stubs and span processor with real OpenAI Agents SDK;
   remove non-existent `operation`, `description`, `agent_id`, and `model` fields.
   ([#4229](https://github.com/open-telemetry/opentelemetry-python-contrib/pull/4229))
