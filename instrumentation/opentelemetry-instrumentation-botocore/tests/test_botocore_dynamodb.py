@@ -520,3 +520,31 @@ class TestDynamoDbExtension(TestBase):
                 aws_attributes.AWS_DYNAMODB_GLOBAL_SECONDARY_INDEX_UPDATES
             ],
         )
+
+    def _peer_name_for(self, endpoint_url: str) -> str:
+        extension = _DynamoDbExtension(
+            mock.MagicMock(
+                operation="UnmappedOperation", endpoint_url=endpoint_url
+            )
+        )
+        attributes = {}
+        extension.extract_attributes(attributes)
+        return attributes[NET_PEER_NAME]
+
+    def test_peer_name_without_credentials(self):
+        self.assertEqual(
+            "dynamodb.us-west-2.amazonaws.com",
+            self._peer_name_for("https://dynamodb.us-west-2.amazonaws.com"),
+        )
+        self.assertEqual(
+            "localhost:8000", self._peer_name_for("http://localhost:8000")
+        )
+
+    def test_peer_name_strips_userinfo(self):
+        self.assertEqual(
+            "proxy:8000",
+            self._peer_name_for("https://user:secret@proxy:8000"),
+        )
+        self.assertEqual(
+            "proxy", self._peer_name_for("https://user:secret@proxy")
+        )
