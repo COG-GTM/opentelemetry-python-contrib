@@ -181,12 +181,29 @@ class TestResolveContentMode:
     def test_resolve_content_mode_for_none(self):
         sp, init_module = _get_modules()
         result = init_module._resolve_content_mode(None)
-        assert result == sp.ContentCaptureMode.SPAN_AND_EVENT
+        assert result == sp.ContentCaptureMode.NO_CONTENT
 
     def test_resolve_content_mode_for_empty_string(self):
         sp, init_module = _get_modules()
         result = init_module._resolve_content_mode("")
-        assert result == sp.ContentCaptureMode.SPAN_AND_EVENT
+        assert result == sp.ContentCaptureMode.NO_CONTENT
+
+    def test_resolve_content_mode_for_unrecognized_value(self):
+        sp, init_module = _get_modules()
+        result = init_module._resolve_content_mode("maybe")
+        assert result == sp.ContentCaptureMode.NO_CONTENT
+
+    def test_processor_content_mode_defaults_to_no_content(self):
+        sp, _ = _get_modules()
+        processor = sp.GenAISemanticProcessor()
+        assert processor._content_mode == sp.ContentCaptureMode.NO_CONTENT
+        assert processor.include_sensitive_data is False
+
+    def test_processor_include_sensitive_data_opts_in(self):
+        sp, _ = _get_modules()
+        processor = sp.GenAISemanticProcessor(include_sensitive_data=True)
+        assert processor._content_mode == sp.ContentCaptureMode.SPAN_AND_EVENT
+        assert processor.include_sensitive_data is True
 
     def test_resolve_content_mode_span_only_variants(self):
         sp, init_module = _get_modules()

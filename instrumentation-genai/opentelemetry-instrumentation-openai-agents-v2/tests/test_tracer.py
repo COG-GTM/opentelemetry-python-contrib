@@ -34,6 +34,7 @@ from opentelemetry.instrumentation.openai_agents import (  # noqa: E402
     OpenAIAgentsInstrumentor,
 )
 from opentelemetry.instrumentation.openai_agents.span_processor import (  # noqa: E402
+    ContentCaptureMode,
     ContentPayload,
     GenAISemanticProcessor,
 )
@@ -68,6 +69,15 @@ GEN_AI_OUTPUT_MESSAGES = getattr(
 )
 GEN_AI_TOOL_DEFINITIONS = getattr(
     GenAI, "GEN_AI_TOOL_DEFINITIONS", "gen_ai.tool.definitions"
+)
+GEN_AI_SYSTEM_INSTRUCTIONS = getattr(
+    GenAI, "GEN_AI_SYSTEM_INSTRUCTIONS", "gen_ai.system_instructions"
+)
+GEN_AI_TOOL_CALL_ARGUMENTS = getattr(
+    GenAI, "GEN_AI_TOOL_CALL_ARGUMENTS", "gen_ai.tool.call.arguments"
+)
+GEN_AI_TOOL_CALL_RESULT = getattr(
+    GenAI, "GEN_AI_TOOL_CALL_RESULT", "gen_ai.tool.call.result"
 )
 
 
@@ -216,7 +226,9 @@ def _placeholder_message() -> dict[str, Any]:
 
 
 def test_normalize_messages_skips_empty_when_sensitive_enabled():
-    processor = GenAISemanticProcessor(metrics_enabled=False)
+    processor = GenAISemanticProcessor(
+        content_mode=ContentCaptureMode.SPAN_AND_EVENT, metrics_enabled=False
+    )
     normalized = processor._normalize_messages_to_role_parts(
         [{"role": "user", "content": None}]
     )
@@ -234,7 +246,9 @@ def test_normalize_messages_emits_placeholder_when_sensitive_disabled():
 
 
 def test_agent_content_aggregation_skips_duplicate_snapshots():
-    processor = GenAISemanticProcessor(metrics_enabled=False)
+    processor = GenAISemanticProcessor(
+        content_mode=ContentCaptureMode.SPAN_AND_EVENT, metrics_enabled=False
+    )
     agent_id = "agent-span"
     processor._agent_content[agent_id] = {
         "input_messages": [],
@@ -270,7 +284,9 @@ def test_agent_content_aggregation_skips_duplicate_snapshots():
 
 
 def test_agent_content_aggregation_filters_placeholder_append_when_sensitive():
-    processor = GenAISemanticProcessor(metrics_enabled=False)
+    processor = GenAISemanticProcessor(
+        content_mode=ContentCaptureMode.SPAN_AND_EVENT, metrics_enabled=False
+    )
     agent_id = "agent-span"
     processor._agent_content[agent_id] = {
         "input_messages": [],
@@ -363,7 +379,9 @@ def test_agent_content_aggregation_appends_new_messages_once():
 
 
 def test_agent_span_collects_child_messages():
-    instrumentor, exporter = _instrument_with_provider()
+    instrumentor, exporter = _instrument_with_provider(
+        capture_message_content="span_and_event"
+    )
 
     try:
         provider = agents_tracing.get_trace_provider()
@@ -474,8 +492,52 @@ def test_capture_mode_can_be_disabled():
         exporter.clear()
 
 
-def test_response_span_records_response_attributes():
+def test_content_capture_is_disabled_by_default(monkeypatch):
+    monkeypatch.delenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False
+    )
+    monkeypatch.delenv(
+        "OTEL_INSTRUMENTATION_OPENAI_AGENTS_CAPTURE_CONTENT", raising=False
+    )
     instrumentor, exporter = _instrument_with_provider()
+
+    try:
+        with trace("workflow"):
+            with generation_span(
+                input=[{"role": "user", "content": "my password is hunter2"}],
+                output=[{"role": "assistant", "content": "hello"}],
+                model="gpt-4o-mini",
+            ):
+                pass
+            with function_span(
+                name="fetch_weather",
+                input='{"api_key": "secret"}',
+                output="sunny",
+            ):
+                pass
+
+        spans = exporter.get_finished_spans()
+        sensitive_attributes = (
+            GEN_AI_INPUT_MESSAGES,
+            GEN_AI_OUTPUT_MESSAGES,
+            GEN_AI_SYSTEM_INSTRUCTIONS,
+            GEN_AI_TOOL_CALL_ARGUMENTS,
+            GEN_AI_TOOL_CALL_RESULT,
+        )
+        for span in spans:
+            for attribute in sensitive_attributes:
+                assert attribute not in span.attributes
+                for event in span.events:
+                    assert attribute not in event.attributes
+    finally:
+        instrumentor.uninstrument()
+        exporter.clear()
+
+
+def test_response_span_records_response_attributes():
+    instrumentor, exporter = _instrument_with_provider(
+        capture_message_content="span_and_event"
+    )
 
     class _Usage:
         def __init__(self, input_tokens: int, output_tokens: int) -> None:
