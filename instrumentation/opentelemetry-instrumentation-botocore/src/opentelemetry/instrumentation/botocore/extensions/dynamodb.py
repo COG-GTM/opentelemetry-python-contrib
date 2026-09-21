@@ -366,7 +366,12 @@ class _DynamoDbExtension(_AwsSdkExtension):
         )
 
     def _get_peer_name(self) -> str:
-        return urlparse(self._call_context.endpoint_url).netloc
+        parsed = urlparse(self._call_context.endpoint_url)
+        if not parsed.hostname:
+            return ""
+        if parsed.port is None:
+            return parsed.hostname
+        return f"{parsed.hostname}:{parsed.port}"
 
     def before_service_call(
         self, span: Span, instrumentor_context: _BotocoreInstrumentorContext
