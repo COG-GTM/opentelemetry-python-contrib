@@ -982,6 +982,25 @@ class TestWsgiAttributes(unittest.TestCase):
         self.assertEqual(mock_span.is_recording.call_count, 2)
         self.assertEqual(attrs[HTTP_STATUS_CODE], 404)
 
+    def test_remove_sensitive_params_from_target_and_query(self):
+        self.environ["RAW_URI"] = "/status/200?foo=bar&sig=secret"
+        self.environ["PATH_INFO"] = "/status/200"
+        self.environ["QUERY_STRING"] = "foo=bar&sig=secret"
+        self.assertGreaterEqual(
+            otel_wsgi.collect_request_attributes(self.environ).items(),
+            {HTTP_TARGET: "/status/200?foo=bar&sig=REDACTED"}.items(),
+        )
+        self.assertGreaterEqual(
+            otel_wsgi.collect_request_attributes(
+                self.environ,
+                _StabilityMode.HTTP,
+            ).items(),
+            {
+                URL_PATH: "/status/200",
+                URL_QUERY: "foo=bar&sig=REDACTED",
+            }.items(),
+        )
+
     def test_remove_sensitive_params(self):
         self.environ["HTTP_HOST"] = "username:password@mock"
         self.environ["PATH_INFO"] = "/status/200"
