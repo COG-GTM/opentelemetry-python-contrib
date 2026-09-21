@@ -34,6 +34,10 @@ from opentelemetry.instrumentation.openai_agents import (  # noqa: E402
     OpenAIAgentsInstrumentor,
 )
 from opentelemetry.instrumentation.openai_agents.span_processor import (  # noqa: E402
+    GEN_AI_SYSTEM_INSTRUCTIONS,
+    GEN_AI_TOOL_CALL_ARGUMENTS,
+    GEN_AI_TOOL_CALL_RESULT,
+    ContentCaptureMode,
     ContentPayload,
     GenAISemanticProcessor,
 )
@@ -72,6 +76,7 @@ GEN_AI_TOOL_DEFINITIONS = getattr(
 
 
 def _instrument_with_provider(**instrument_kwargs):
+    instrument_kwargs.setdefault("capture_message_content", "span_and_event")
     set_trace_processors([])
     provider = TracerProvider()
     exporter = InMemorySpanExporter()
@@ -215,8 +220,15 @@ def _placeholder_message() -> dict[str, Any]:
     }
 
 
+def _sensitive_processor() -> GenAISemanticProcessor:
+    return GenAISemanticProcessor(
+        content_mode=ContentCaptureMode.SPAN_AND_EVENT,
+        metrics_enabled=False,
+    )
+
+
 def test_normalize_messages_skips_empty_when_sensitive_enabled():
-    processor = GenAISemanticProcessor(metrics_enabled=False)
+    processor = _sensitive_processor()
     normalized = processor._normalize_messages_to_role_parts(
         [{"role": "user", "content": None}]
     )
@@ -234,7 +246,7 @@ def test_normalize_messages_emits_placeholder_when_sensitive_disabled():
 
 
 def test_agent_content_aggregation_skips_duplicate_snapshots():
-    processor = GenAISemanticProcessor(metrics_enabled=False)
+    processor = _sensitive_processor()
     agent_id = "agent-span"
     processor._agent_content[agent_id] = {
         "input_messages": [],
@@ -270,7 +282,7 @@ def test_agent_content_aggregation_skips_duplicate_snapshots():
 
 
 def test_agent_content_aggregation_filters_placeholder_append_when_sensitive():
-    processor = GenAISemanticProcessor(metrics_enabled=False)
+    processor = _sensitive_processor()
     agent_id = "agent-span"
     processor._agent_content[agent_id] = {
         "input_messages": [],
@@ -326,7 +338,7 @@ def test_agent_content_aggregation_retains_placeholder_when_sensitive_disabled()
 
 
 def test_agent_content_aggregation_appends_new_messages_once():
-    processor = GenAISemanticProcessor(metrics_enabled=False)
+    processor = _sensitive_processor()
     agent_id = "agent-span"
     processor._agent_content[agent_id] = {
         "input_messages": [],
@@ -440,6 +452,49 @@ def test_agent_name_override_applied_to_agent_spans():
             agent_span_record.attributes[GenAI.GEN_AI_AGENT_NAME]
             == "Travel Concierge"
         )
+    finally:
+        instrumentor.uninstrument()
+        exporter.clear()
+
+
+def test_content_capture_is_disabled_by_default(monkeypatch):
+    monkeypatch.delenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False
+    )
+    monkeypatch.delenv(
+        "OTEL_INSTRUMENTATION_OPENAI_AGENTS_CAPTURE_CONTENT", raising=False
+    )
+    set_trace_processors([])
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    instrumentor = OpenAIAgentsInstrumentor()
+    instrumentor.instrument(tracer_provider=provider)
+
+    try:
+        with trace("workflow"):
+            with generation_span(
+                input=[{"role": "user", "content": "hi"}],
+                output=[{"role": "assistant", "content": "hello"}],
+                model="gpt-4o-mini",
+            ):
+                pass
+            with function_span(
+                name="fetch_weather",
+                input='{"city": "Paris"}',
+                output='{"temperature": 70}',
+            ):
+                pass
+
+        for span in exporter.get_finished_spans():
+            assert GEN_AI_INPUT_MESSAGES not in span.attributes
+            assert GEN_AI_OUTPUT_MESSAGES not in span.attributes
+            assert GEN_AI_SYSTEM_INSTRUCTIONS not in span.attributes
+            assert GEN_AI_TOOL_CALL_ARGUMENTS not in span.attributes
+            assert GEN_AI_TOOL_CALL_RESULT not in span.attributes
+            for event in span.events:
+                assert GEN_AI_INPUT_MESSAGES not in event.attributes
+                assert GEN_AI_OUTPUT_MESSAGES not in event.attributes
     finally:
         instrumentor.uninstrument()
         exporter.clear()

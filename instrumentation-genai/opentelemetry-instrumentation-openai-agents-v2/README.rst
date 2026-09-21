@@ -89,6 +89,11 @@ variables:
   message content is captured. Valid values map to
   :class:`opentelemetry.instrumentation.openai_agents.ContentCaptureMode`
   (``span_only``, ``event_only``, ``span_and_event``, ``no_content``).
+  Capturing message content is opt-in: when the variable is unset, empty, or
+  set to an unrecognized value, no prompts, completions, system instructions,
+  or tool call arguments and results are recorded. Message content may contain
+  personal data or secrets, so only enable it when your telemetry backend is
+  an appropriate place for it.
 * ``OTEL_INSTRUMENTATION_OPENAI_AGENTS_CAPTURE_METRICS`` – set to ``false`` to
   disable duration/token metrics.
 * ``OTEL_INSTRUMENTATION_OPENAI_AGENTS_SYSTEM`` – overrides the ``gen_ai.system``
