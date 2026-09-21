@@ -35,6 +35,7 @@ API
 from __future__ import annotations
 
 import os
+import re
 import sys
 from functools import partial
 from logging import getLogger
@@ -44,6 +45,7 @@ from typing import (
     Awaitable,
     Callable,
     Collection,
+    Sequence,
     TypeVar,
 )
 
@@ -68,6 +70,7 @@ from opentelemetry.semconv._incubating.attributes.process_attributes import (
 )
 from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
 from opentelemetry.trace.status import StatusCode
+from opentelemetry.util.http import redact_url
 
 if TYPE_CHECKING:
     from typing import TypedDict
@@ -84,6 +87,60 @@ _logger = getLogger(__name__)
 
 T = TypeVar("T")
 P = ParamSpec("P")
+
+_REDACTED = "REDACTED"
+_SENSITIVE_OPTION_TOKENS = frozenset(
+    {
+        "auth",
+        "authorization",
+        "credential",
+        "credentials",
+        "key",
+        "keys",
+        "pass",
+        "passphrase",
+        "passwd",
+        "password",
+        "pwd",
+        "secret",
+        "secrets",
+        "token",
+    }
+)
+
+
+def _is_sensitive_option(option: str) -> bool:
+    tokens = re.split(r"[-_.]", option.lstrip("-").casefold())
+    return not _SENSITIVE_OPTION_TOKENS.isdisjoint(tokens)
+
+
+def _redact_argv(argv: Sequence[str]) -> tuple[str, ...]:
+    """Redact secrets from command line arguments.
+
+    Values of options whose name looks sensitive (``--password``, ``--token``,
+    ...) are replaced by ``REDACTED``, both in the ``--opt=value`` and in the
+    ``--opt value`` form. Remaining arguments go through
+    :func:`opentelemetry.util.http.redact_url` so that credentials embedded in
+    URLs (such as database DSNs) are redacted as well.
+    """
+    redacted: list[str] = []
+    redact_next = False
+    for arg in argv:
+        if redact_next:
+            redacted.append(_REDACTED)
+            redact_next = False
+            continue
+        if arg.startswith("-"):
+            option, separator, _ = arg.partition("=")
+            if _is_sensitive_option(option):
+                if separator:
+                    redacted.append(f"{option}={_REDACTED}")
+                else:
+                    redacted.append(arg)
+                    redact_next = True
+                continue
+        redacted.append(redact_url(arg))
+    return tuple(redacted)
 
 
 async def _command_invoke_wrapper(
@@ -103,7 +160,7 @@ async def _command_invoke_wrapper(
 
     span_name = ctx.info_name
     span_attributes = {
-        PROCESS_COMMAND_ARGS: sys.argv,
+        PROCESS_COMMAND_ARGS: _redact_argv(sys.argv),
         PROCESS_EXECUTABLE_NAME: sys.argv[0],
         PROCESS_EXIT_CODE: 0,
         PROCESS_PID: os.getpid(),

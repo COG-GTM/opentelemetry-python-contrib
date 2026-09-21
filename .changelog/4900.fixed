@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-asyncclick`: redact secrets from the `process.command_args` span attribute instead of recording `sys.argv` verbatim
