@@ -154,6 +154,48 @@ class TestLambdaExtension(TestBase):
         finally:
             set_global_textmap(previous_propagator)
 
+    def _inject_payload(self, payload_str: str) -> str:
+        extension = self._create_extension("Invoke")
+        extension._call_context.params["Payload"] = payload_str
+        extension._op._inject_current_span(extension._call_context)
+        return extension._call_context.params["Payload"]
+
+    def test_invoke_payload_not_an_object_is_left_untouched(self):
+        previous_propagator = get_global_textmap()
+        try:
+            set_global_textmap(MockTextMapPropagator())
+            for payload_str in ('"a string"', "[1, 2]", "123", "null"):
+                with self.subTest(payload=payload_str):
+                    self.assertEqual(
+                        payload_str, self._inject_payload(payload_str)
+                    )
+        finally:
+            set_global_textmap(previous_propagator)
+
+    def test_invoke_payload_with_non_dict_headers_is_left_untouched(self):
+        previous_propagator = get_global_textmap()
+        try:
+            set_global_textmap(MockTextMapPropagator())
+            payload_str = json.dumps({"headers": ["not", "a", "dict"]})
+            self.assertEqual(payload_str, self._inject_payload(payload_str))
+        finally:
+            set_global_textmap(previous_propagator)
+
+    def test_invoke_payload_injects_into_object(self):
+        previous_propagator = get_global_textmap()
+        try:
+            set_global_textmap(MockTextMapPropagator())
+            payload = json.loads(self._inject_payload(json.dumps({"a": 1})))
+            self.assertEqual(1, payload["a"])
+            self.assertIn(
+                MockTextMapPropagator.TRACE_ID_KEY, payload["headers"]
+            )
+        finally:
+            set_global_textmap(previous_propagator)
+
+    def test_invoke_invalid_json_payload_is_left_untouched(self):
+        self.assertEqual("not json", self._inject_payload("not json"))
+
     def test_invoke_parse_arn(self):
         function_name = "my_func"
         arns = (
