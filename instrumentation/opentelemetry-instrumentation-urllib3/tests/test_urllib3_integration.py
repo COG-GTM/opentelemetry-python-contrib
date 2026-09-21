@@ -1,6 +1,7 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import json
 import typing
 from unittest import mock
@@ -19,6 +20,7 @@ from opentelemetry.instrumentation._semconv import (
 from opentelemetry.instrumentation.urllib3 import (
     RequestInfo,
     URLLib3Instrumentor,
+    _get_url,
 )
 from opentelemetry.instrumentation.utils import (
     suppress_http_instrumentation,
@@ -514,6 +516,40 @@ class TestURLLib3Instrumentor(TestBase):
 
         response = self.perform_request(url)
         self.assert_success_span(response, self.HTTP_URL)
+
+    def test_credential_removal_from_absolute_url(self):
+        pool = urllib3.HTTPConnectionPool("mock")
+        bound_args = inspect.signature(
+            urllib3.connectionpool.HTTPConnectionPool.urlopen
+        ).bind(pool, "GET", "http://username:password@mock/status/200")
+
+        self.assertEqual(
+            _get_url(pool, bound_args, None),
+            "http://REDACTED:REDACTED@mock/status/200",
+        )
+
+    def test_signed_query_parameters_redaction(self):
+        response = self.perform_request(
+            self.HTTP_URL + "?AWSAccessKeyId=secret&Signature=secret&foo=bar"
+        )
+        self.assert_success_span(
+            response,
+            self.HTTP_URL
+            + "?AWSAccessKeyId=REDACTED&Signature=REDACTED&foo=bar",
+        )
+
+    def test_url_filter_receives_redacted_url(self):
+        filtered_urls = []
+
+        def url_filter(url):
+            filtered_urls.append(url)
+            return url
+
+        URLLib3Instrumentor().uninstrument()
+        URLLib3Instrumentor().instrument(url_filter=url_filter)
+
+        self.perform_request(self.HTTP_URL + "?sig=secret")
+        self.assertEqual(filtered_urls, [self.HTTP_URL + "?sig=REDACTED"])
 
     def test_hooks(self):
         def request_hook(span, pool, request_info):
