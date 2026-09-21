@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-google-genai`: stop logging unknown message part contents; unhandled parts are now logged at DEBUG with only their field names, so content is not written to application logs when content capture is disabled
