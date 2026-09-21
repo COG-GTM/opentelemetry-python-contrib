@@ -478,6 +478,24 @@ def get_host_port_url_tuple(scope):
     return server_host, port, http_url
 
 
+def _get_excluded_urls_target(scope: dict[str, Any]) -> str:
+    """Returns the URL the ``excluded_urls`` patterns are evaluated against.
+
+    The host comes from the ``server`` entry of the scope instead of the
+    client supplied ``Host`` header, so that a client cannot match an
+    exclusion pattern by sending a crafted header.
+    """
+    server = scope.get("server") or ["0.0.0.0", 80]
+    port = server[1]
+    server_host = server[0] + (":" + str(port) if str(port) != "80" else "")
+    return (
+        scope.get("scheme", "http")
+        + "://"
+        + server_host
+        + scope.get("path", "")
+    )
+
+
 def set_status_code(
     span,
     status_code,
@@ -743,8 +761,9 @@ class OpenTelemetryMiddleware:
         ):
             return await self.app(scope, receive, send)
 
-        _, _, url = get_host_port_url_tuple(scope)
-        if self.excluded_urls and self.excluded_urls.url_disabled(url):
+        if self.excluded_urls and self.excluded_urls.url_disabled(
+            _get_excluded_urls_target(scope)
+        ):
             return await self.app(scope, receive, send)
 
         span_name, additional_attributes = self.default_span_details(scope)
