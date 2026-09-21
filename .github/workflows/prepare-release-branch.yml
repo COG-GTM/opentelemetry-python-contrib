@@ -81,13 +81,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - name: Install tox
-        run: pip install tox
+      - name: Install release tooling
+        run: pip install --require-hashes -r .github/workflows/requirements/release-tooling.txt
       - name: run tox
         run: tox -e generate
-
-      - name: Install towncrier
-        run: pip install towncrier==25.8.0
 
       - name: Generate changelog
         run: towncrier build --yes --version "$STABLE_VERSION/$UNSTABLE_VERSION"
@@ -184,13 +181,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - name: Install tox
-        run: pip install tox
+      - name: Install release tooling
+        run: pip install --require-hashes -r .github/workflows/requirements/release-tooling.txt
       - name: run tox
         run: tox -e generate
-
-      - name: Install towncrier
-        run: pip install towncrier==25.8.0
 
       - name: Generate changelog
         run: towncrier build --yes --version "$STABLE_VERSION/$UNSTABLE_VERSION"
