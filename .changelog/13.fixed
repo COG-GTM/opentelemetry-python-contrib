@@ -1,0 +1,1 @@
+`opentelemetry-util-http`: parse `OTEL_PYTHON_INSTRUMENTATION_HTTP_CAPTURE_ALL_METHODS` as a boolean so falsy values like `false` and `0` no longer enable capturing arbitrary HTTP method names
