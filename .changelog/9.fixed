@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-botocore` strip URL userinfo credentials from the DynamoDB `net.peer.name` span attribute
