@@ -3,6 +3,7 @@
 
 # pylint: disable=too-many-lines
 
+import asyncio
 import sys
 import time
 import unittest
@@ -116,7 +117,11 @@ _recommended_attrs_both["http.server.active_requests"].extend(
     _server_active_requests_count_attrs_old
 )
 
-_SIMULATED_BACKGROUND_TASK_EXECUTION_TIME_S = 0.01
+_SIMULATED_BACKGROUND_TASK_EXECUTION_TIME_S = 0.2
+
+# The default output timeout of AsyncAsgiTestBase is short enough that a loaded
+# CI runner can produce no output at all before it expires.
+_FIRST_OUTPUT_TIMEOUT_S = 1
 
 
 async def http_app(scope, receive, send):
@@ -299,8 +304,22 @@ def failing_hook(msg):
 SCOPE = "opentelemetry.instrumentation.asgi"
 
 
+class SlowerTimeoutAsgiTestBase(AsyncAsgiTestBase):
+    """Waits longer for the application to produce its first output message."""
+
+    async def get_output(self, timeout=_FIRST_OUTPUT_TIMEOUT_S):
+        return await super().get_output(timeout)
+
+    async def get_all_output(self, timeout=_FIRST_OUTPUT_TIMEOUT_S):
+        try:
+            outputs = [await self.communicator.receive_output(timeout)]
+        except asyncio.TimeoutError:
+            return []
+        return outputs + await super().get_all_output()
+
+
 # pylint: disable=too-many-public-methods
-class TestAsgiApplication(AsyncAsgiTestBase):
+class TestAsgiApplication(SlowerTimeoutAsgiTestBase):
     def setUp(self):
         super().setUp()
 
@@ -2098,7 +2117,7 @@ class TestAsgiAttributes(unittest.TestCase):
         )
 
 
-class TestWrappedApplication(AsyncAsgiTestBase):
+class TestWrappedApplication(SlowerTimeoutAsgiTestBase):
     async def test_mark_span_internal_in_presence_of_span_from_other_framework(
         self,
     ):
@@ -2134,7 +2153,7 @@ class TestWrappedApplication(AsyncAsgiTestBase):
         )
 
 
-class TestAsgiApplicationRaisingError(AsyncAsgiTestBase):
+class TestAsgiApplicationRaisingError(SlowerTimeoutAsgiTestBase):
     def tearDown(self):
         pass
 
