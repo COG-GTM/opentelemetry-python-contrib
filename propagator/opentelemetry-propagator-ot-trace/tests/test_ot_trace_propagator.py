@@ -327,6 +327,79 @@ class TestOTTracePropagator(TestCase):
         self.assertEqual(baggage["abc"], "abc")
         self.assertEqual(baggage["def"], "def")
 
+    def test_extract_baggage_entry_count_is_limited(self):
+        """Test that at most 180 baggage entries are extracted"""
+
+        carrier = {
+            OT_TRACE_ID_HEADER: "64fe8b2a57d3eff7",
+            OT_SPAN_ID_HEADER: "e457b5a2e4d86bd1",
+            OT_SAMPLED_HEADER: "false",
+        }
+        carrier.update(
+            {
+                "".join([OT_BAGGAGE_PREFIX, f"key{index}"]): "value"
+                for index in range(200)
+            }
+        )
+
+        baggage = get_all(self.ot_trace_propagator.extract(carrier))
+
+        self.assertEqual(len(baggage), 180)
+
+    def test_extract_baggage_entry_length_is_limited(self):
+        """Test that baggage entries longer than 4096 bytes are dropped"""
+
+        context = self.ot_trace_propagator.extract(
+            {
+                OT_TRACE_ID_HEADER: "64fe8b2a57d3eff7",
+                OT_SPAN_ID_HEADER: "e457b5a2e4d86bd1",
+                OT_SAMPLED_HEADER: "false",
+                "".join([OT_BAGGAGE_PREFIX, "small"]): "value",
+                "".join([OT_BAGGAGE_PREFIX, "large"]): "v" * 4096,
+            },
+        )
+
+        baggage = get_all(context)
+
+        self.assertEqual(baggage, {"small": "value"})
+
+    def test_extract_baggage_total_length_is_limited(self):
+        """Test that baggage extraction stops after 8192 bytes"""
+
+        carrier = {
+            OT_TRACE_ID_HEADER: "64fe8b2a57d3eff7",
+            OT_SPAN_ID_HEADER: "e457b5a2e4d86bd1",
+            OT_SAMPLED_HEADER: "false",
+        }
+        carrier.update(
+            {
+                "".join([OT_BAGGAGE_PREFIX, f"key{index}"]): "v" * 1000
+                for index in range(20)
+            }
+        )
+
+        baggage = get_all(self.ot_trace_propagator.extract(carrier))
+
+        self.assertEqual(len(baggage), 8)
+
+    def test_extract_invalid_baggage_entries(self):
+        """Test that baggage entries with invalid keys or values are dropped"""
+
+        context = self.ot_trace_propagator.extract(
+            {
+                OT_TRACE_ID_HEADER: "64fe8b2a57d3eff7",
+                OT_SPAN_ID_HEADER: "e457b5a2e4d86bd1",
+                OT_SAMPLED_HEADER: "false",
+                "".join([OT_BAGGAGE_PREFIX, "valid"]): "value",
+                "".join([OT_BAGGAGE_PREFIX, "("]): "value",
+                "".join([OT_BAGGAGE_PREFIX, "invalid_value"]): "α",
+            },
+        )
+
+        baggage = get_all(context)
+
+        self.assertEqual(baggage, {"valid": "value"})
+
     def test_extract_empty_to_explicit_ctx(self):
         """Test extraction when no headers are present"""
         orig_ctx = Context({"k1": "v1"})

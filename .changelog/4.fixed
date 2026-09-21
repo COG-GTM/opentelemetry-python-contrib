@@ -1,0 +1,1 @@
+`opentelemetry-propagator-ot-trace`: limit baggage extracted from `ot-baggage-*` headers to 180 entries, 4096 bytes per entry and 8192 bytes total, and drop entries with invalid keys or values
