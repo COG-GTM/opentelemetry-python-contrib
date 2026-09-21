@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-dbapi` Fix `IndexError` when the SQL statement is comment-only or whitespace-only
