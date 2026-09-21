@@ -280,6 +280,7 @@ from opentelemetry.util.http import (
     normalise_response_header_name,
     normalize_user_agent,
     parse_excluded_urls,
+    redact_query_parameters,
     redact_url,
     sanitize_method,
 )
@@ -352,10 +353,11 @@ def collect_request_attributes(
     dictionary to be used as span creation attributes."""
     server_host, port, http_url = get_host_port_url_tuple(scope)
     query_string = scope.get("query_string")
-    if query_string and http_url:
+    if query_string:
         if isinstance(query_string, bytes):
             query_string = query_string.decode("utf8")
-        http_url += "?" + urllib.parse.unquote(query_string)
+        if http_url:
+            http_url += "?" + urllib.parse.unquote(query_string)
     result = {}
 
     scheme = scope.get("scheme")
@@ -370,8 +372,13 @@ def collect_request_attributes(
         _set_http_flavor_version(result, flavor, sem_conv_opt_in_mode)
     path = scope.get("path")
     if path:
+        redacted_query_string = query_string
+        if redacted_query_string:
+            _, redacted_query_string = _parse_url_query(
+                redact_query_parameters(f"?{query_string}")
+            )
         _set_http_target(
-            result, path, path, query_string, sem_conv_opt_in_mode
+            result, path, path, redacted_query_string, sem_conv_opt_in_mode
         )
     if http_url:
         if _report_old(sem_conv_opt_in_mode):

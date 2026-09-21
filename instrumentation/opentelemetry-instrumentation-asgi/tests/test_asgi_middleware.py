@@ -2066,6 +2066,16 @@ class TestAsgiAttributes(unittest.TestCase):
             "http://REDACTED:REDACTED@mock/status/200?X-Goog-Signature=REDACTED",
         )
 
+    def test_remove_sensitive_params_new_semconv(self):
+        self.scope["path"] = "/status/200"
+        self.scope["query_string"] = b"foo=bar&X-Goog-Signature=1234567890"
+        attrs = otel_asgi.collect_request_attributes(
+            self.scope,
+            _StabilityMode.HTTP,
+        )
+        self.assertEqual(attrs[URL_PATH], "/status/200")
+        self.assertEqual(attrs[URL_QUERY], "foo=bar&X-Goog-Signature=REDACTED")
+
     def test_collect_target_attribute_missing(self):
         self.assertIsNone(otel_asgi._collect_target_attribute(self.scope))
 
