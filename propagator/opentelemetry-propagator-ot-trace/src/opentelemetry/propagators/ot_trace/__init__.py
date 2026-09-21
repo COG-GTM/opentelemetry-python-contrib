@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from re import compile as re_compile
-from typing import Any, Iterable, Optional
+from typing import Any, Dict, Iterable, Optional
 
 from opentelemetry.baggage import get_all, set_baggage
 from opentelemetry.context import Context
@@ -28,6 +28,12 @@ OT_TRACE_ID_HEADER = "ot-tracer-traceid"
 OT_SPAN_ID_HEADER = "ot-tracer-spanid"
 OT_SAMPLED_HEADER = "ot-tracer-sampled"
 OT_BAGGAGE_PREFIX = "ot-baggage-"
+
+# Limits equivalent to those of the W3C baggage specification, applied to
+# baggage extracted from inbound headers.
+_MAX_BAGGAGE_ENTRIES = 180
+_MAX_ENTRY_LENGTH = 4096
+_MAX_TOTAL_LENGTH = 8192
 
 _valid_header_name = re_compile(r"[\w_^`!#$%&'*+.|~]+")
 _valid_header_value = re_compile(r"[\t\x20-\x7e\x80-\xff]+")
@@ -81,15 +87,8 @@ class OTTracePropagator(TextMapPropagator):
                 context,
             )
 
-            baggage = get_all(context) or {}
-
-            for key in getter.keys(carrier):
-                if not key.startswith(OT_BAGGAGE_PREFIX):
-                    continue
-
-                baggage[key[len(OT_BAGGAGE_PREFIX) :]] = (
-                    _extract_first_element(getter.get(carrier, key))
-                )
+            baggage = dict(get_all(context) or {})
+            baggage.update(_extract_baggage(carrier, getter))
 
             for key, value in baggage.items():
                 context = set_baggage(key, value, context)
@@ -162,6 +161,50 @@ def _extract_first_element(
     if items is None:
         return default
     return next(iter(items), None)
+
+
+def _extract_baggage(
+    carrier: CarrierT, getter: Getter[CarrierT]
+) -> Dict[str, str]:
+    """Extract ``ot-baggage-*`` headers, dropping invalid or oversized entries.
+
+    Entries are bounded in number, per entry length and total length so that a
+    remote caller cannot force arbitrary amounts of baggage into the context.
+    """
+    baggage: Dict[str, str] = {}
+    total_length = 0
+
+    for header in getter.keys(carrier):
+        if not header.startswith(OT_BAGGAGE_PREFIX):
+            continue
+
+        if len(baggage) >= _MAX_BAGGAGE_ENTRIES:
+            break
+
+        key = header[len(OT_BAGGAGE_PREFIX) :]
+        value = _extract_first_element(getter.get(carrier, header))
+
+        if not isinstance(value, str):
+            continue
+
+        if (
+            _valid_header_name.fullmatch(key) is None
+            or _valid_header_value.fullmatch(value) is None
+        ):
+            continue
+
+        entry_length = len(key) + len(value)
+
+        if entry_length > _MAX_ENTRY_LENGTH:
+            continue
+
+        if total_length + entry_length > _MAX_TOTAL_LENGTH:
+            break
+
+        total_length += entry_length
+        baggage[key] = value
+
+    return baggage
 
 
 def _extract_identifier(
