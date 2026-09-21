@@ -46,6 +46,7 @@ import typing
 from typing import Dict, Optional
 
 from rich.console import Console
+from rich.markup import escape
 from rich.syntax import Syntax
 from rich.text import Text
 from rich.tree import Tree
@@ -56,6 +57,11 @@ from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.semconv._incubating.attributes.db_attributes import (
     DB_STATEMENT,
 )
+
+
+def _escape(value: typing.Any) -> str:
+    # span data is untrusted, so it must not be interpreted as console markup
+    return escape(str(value))
 
 
 def _ns_to_time(nanoseconds):
@@ -94,7 +100,7 @@ def _add_status(child: Tree, span: ReadableSpan):
     if span.status.description:
         child.add(
             Text.from_markup(
-                f"[bold cyan]Description :[/bold cyan] {span.status.description}"
+                f"[bold cyan]Description :[/bold cyan] {_escape(span.status.description)}"
             )
         )
 
@@ -110,7 +116,9 @@ def _child_add_optional_attributes(
             event_node = events.add(Text(event.name))
             for key, val in event.attributes.items():
                 event_node.add(
-                    Text.from_markup(f"[bold cyan]{key} :[/bold cyan] {val}")
+                    Text.from_markup(
+                        f"[bold cyan]{_escape(key)} :[/bold cyan] {_escape(val)}"
+                    )
                 )
     if span.attributes:
         attributes = child.add(
@@ -119,13 +127,15 @@ def _child_add_optional_attributes(
         for attribute in span.attributes:
             if attribute == DB_STATEMENT:
                 attributes.add(
-                    Text.from_markup(f"[bold cyan]{attribute} :[/bold cyan] ")
+                    Text.from_markup(
+                        f"[bold cyan]{_escape(attribute)} :[/bold cyan] "
+                    )
                 )
                 attributes.add(Syntax(span.attributes[attribute], "sql"))
             else:
                 attributes.add(
                     Text.from_markup(
-                        f"[bold cyan]{attribute} :[/bold cyan] {span.attributes[attribute]}"
+                        f"[bold cyan]{_escape(attribute)} :[/bold cyan] {_escape(span.attributes[attribute])}"
                     )
                 )
     if span.resource and not suppress_resource:
@@ -135,7 +145,7 @@ def _child_add_optional_attributes(
         for resource in span.resource.attributes:
             resources.add(
                 Text.from_markup(
-                    f"[bold cyan]{resource} :[/bold cyan] {span.resource.attributes[resource]}"
+                    f"[bold cyan]{_escape(resource)} :[/bold cyan] {_escape(span.resource.attributes[resource])}"
                 )
             )
 
@@ -188,7 +198,7 @@ class RichConsoleSpanExporter(SpanExporter):
                     )
                     child = tree.add(
                         label=Text.from_markup(
-                            f"[blue][{_ns_to_time(span.start_time)}][/blue] [bold]{span.name}[/bold], span {opentelemetry.trace.format_span_id(span.context.span_id)}"
+                            f"[blue][{_ns_to_time(span.start_time)}][/blue] [bold]{_escape(span.name)}[/bold], span {opentelemetry.trace.format_span_id(span.context.span_id)}"
                         )
                     )
                     parents[span.context.span_id] = child
@@ -199,7 +209,7 @@ class RichConsoleSpanExporter(SpanExporter):
                 elif span.parent and span.parent.span_id in parents:
                     child = parents[span.parent.span_id].add(
                         label=Text.from_markup(
-                            f"[blue][{_ns_to_time(span.start_time)}][/blue] [bold]{span.name}[/bold], span {opentelemetry.trace.format_span_id(span.context.span_id)}"
+                            f"[blue][{_ns_to_time(span.start_time)}][/blue] [bold]{_escape(span.name)}[/bold], span {opentelemetry.trace.format_span_id(span.context.span_id)}"
                         )
                     )
                     parents[span.context.span_id] = child
