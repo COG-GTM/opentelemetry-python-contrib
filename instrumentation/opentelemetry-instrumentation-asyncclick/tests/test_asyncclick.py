@@ -218,6 +218,58 @@ class ClickTestCase(TestBase, IsolatedAsyncioTestCase):
             ),
         )
 
+    @mock.patch(
+        "sys.argv",
+        [
+            "command.py",
+            "-vps3cr3t",
+            "--credentials",
+            "admin",
+            "hunter2",
+            "argument",
+        ],
+    )
+    def test_cli_command_wrapping_redacts_clusters_and_multi_value_options(
+        self,
+    ):
+        @asyncclick.command()
+        @asyncclick.argument("argument")
+        @asyncclick.option("-v", "--verbose", is_flag=True)
+        @asyncclick.option("-p", "--password")
+        @asyncclick.option("--credentials", nargs=2)
+        async def command(
+            argument: str,
+            verbose: bool,
+            password: str,
+            credentials: tuple[str, str],
+        ) -> None:
+            pass
+
+        result = run_asyncclick_command_test(
+            command,
+            [
+                "-vps3cr3t",
+                "--credentials",
+                "admin",
+                "hunter2",
+                "argument",
+            ],
+        )
+        self.assertEqual(result.exit_code, 0)
+
+        (span,) = self.memory_exporter.get_finished_spans()
+        self.assertEqual(
+            span.attributes["process.command_args"],
+            (
+                "command.py",
+                "-vpREDACTED",
+                "--credentials",
+                "REDACTED",
+                "REDACTED",
+                "argument",
+            ),
+        )
+
     @mock.patch("sys.argv", ["command-raises.py"])
     def test_cli_command_raises_error(self):
         @asyncclick.command()

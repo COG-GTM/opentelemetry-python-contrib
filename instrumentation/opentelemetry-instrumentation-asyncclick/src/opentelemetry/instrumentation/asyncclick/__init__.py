@@ -45,6 +45,8 @@ from typing import (
     Awaitable,
     Callable,
     Collection,
+    Mapping,
+    NamedTuple,
     Sequence,
     TypeVar,
 )
@@ -131,80 +133,123 @@ def _is_sensitive_option(option: str) -> bool:
     return any(substring in name for substring in _SENSITIVE_OPTION_SUBSTRINGS)
 
 
-def _sensitive_option_spellings(
+class _OptionInfo(NamedTuple):
+    sensitive: bool
+    takes_value: bool
+    nargs: int
+
+
+def _declared_options(
     ctx: asyncclick.Context,
-) -> tuple[frozenset[str], frozenset[str]]:
-    """Collect the sensitive option spellings declared by the command.
+) -> dict[str, _OptionInfo]:
+    """Describe every option spelling declared by the command.
 
     The command and its parent groups are inspected so that short aliases
-    (``-p`` for ``--password``) are redacted too. Spellings are returned as two
-    sets: options that consume a value and options that are flags and therefore
-    must not swallow the next argument.
+    (``-p`` for ``--password``) are known too. When a spelling is declared
+    more than once in the chain, the declaration leading to the most redaction
+    wins, so a nested non-sensitive flag cannot unmask a parent's secret.
     """
-    value_options: set[str] = set()
-    flag_options: set[str] = set()
+    options: dict[str, _OptionInfo] = {}
     node: asyncclick.Context | None = ctx
     while node is not None:
         for param in node.command.params:
             if not isinstance(param, asyncclick.Option):
                 continue
             spellings = [*param.opts, *param.secondary_opts]
-            if not any(
-                _is_sensitive_option(spelling)
-                for spelling in (param.name or "", *spellings)
-            ):
-                continue
-            if param.is_flag or param.count:
-                flag_options.update(spellings)
-            else:
-                value_options.update(spellings)
+            takes_value = not (param.is_flag or param.count)
+            info = _OptionInfo(
+                sensitive=any(
+                    _is_sensitive_option(spelling)
+                    for spelling in (param.name or "", *spellings)
+                ),
+                takes_value=takes_value,
+                nargs=param.nargs if takes_value else 0,
+            )
+            for spelling in spellings:
+                current = options.get(spelling)
+                if current is None or _redaction_rank(info) > _redaction_rank(
+                    current
+                ):
+                    options[spelling] = info
         node = node.parent
-    return frozenset(value_options), frozenset(flag_options)
+    return options
+
+
+def _redaction_rank(info: _OptionInfo) -> tuple[bool, int]:
+    return (info.sensitive and info.takes_value, info.nargs)
 
 
 def _redact_argv(
     argv: Sequence[str],
-    value_options: frozenset[str] = frozenset(),
-    flag_options: frozenset[str] = frozenset(),
+    options: Mapping[str, _OptionInfo] | None = None,
 ) -> tuple[str, ...]:
     """Redact secrets from command line arguments.
 
-    Values of options declared as sensitive by the command (``value_options``)
-    or whose name looks sensitive (``--password``, ``--token``, ...) are
-    replaced by ``REDACTED``, in the ``--opt=value``, ``--opt value`` and
-    ``-Ovalue`` forms. Options known to be flags are left untouched, since they
-    carry no value. Remaining arguments go through
+    Values of options declared as sensitive by the command (``options``) or
+    whose name looks sensitive (``--password``, ``--token``, ...) are replaced
+    by ``REDACTED``, in the ``--opt=value``, ``--opt value``, ``-Ovalue`` and
+    ``-fOvalue`` (short option cluster) forms, once per value the option
+    consumes. Options known to be flags are left untouched, since they carry no
+    value. Remaining arguments go through
     :func:`opentelemetry.util.http.redact_url` so that credentials embedded in
     URLs (such as database DSNs) are redacted as well.
     """
+    declared = options or {}
     redacted: list[str] = []
-    redact_next = False
+    pending = 0
     for arg in argv:
-        if redact_next:
+        if pending:
             redacted.append(_REDACTED)
-            redact_next = False
+            pending -= 1
             continue
         if arg.startswith("-"):
             option, separator, _ = arg.partition("=")
-            if option in flag_options:
-                redacted.append(arg)
-                continue
-            if option in value_options or _is_sensitive_option(option):
-                if separator:
+            info = declared.get(option)
+            if info is None and _is_sensitive_option(option):
+                info = _OptionInfo(sensitive=True, takes_value=True, nargs=1)
+            if info is not None:
+                if not (info.sensitive and info.takes_value):
+                    redacted.append(arg)
+                elif separator:
                     redacted.append(f"{option}={_REDACTED}")
+                    pending = info.nargs - 1
                 else:
                     redacted.append(arg)
-                    redact_next = True
+                    pending = info.nargs
                 continue
-            if (
-                not arg.startswith("--")
-                and len(arg) > 2
-                and arg[:2] in value_options
-            ):
-                redacted.append(f"{arg[:2]}{_REDACTED}")
+            cluster = _redact_short_cluster(arg, declared)
+            if cluster is not None:
+                arg, pending = cluster
+                redacted.append(arg)
                 continue
         redacted.append(redact_url(arg))
     return tuple(redacted)
+
+
+def _redact_short_cluster(
+    arg: str,
+    options: Mapping[str, _OptionInfo],
+) -> tuple[str, int] | None:
+    """Redact a sensitive short option inside a cluster such as ``-vpsecret``.
+
+    Returns the redacted argument and the number of following arguments that
+    still hold values of the option, or ``None`` when the cluster holds no
+    sensitive option consuming a value.
+    """
+    if arg.startswith("--") or len(arg) < 3:
+        return None
+    for index in range(1, len(arg)):
+        info = options.get(f"-{arg[index]}")
+        if info is None:
+            return None
+        if not info.takes_value:
+            continue
+        if not info.sensitive:
+            return None
+        if index + 1 < len(arg):
+            return f"{arg[: index + 1]}{_REDACTED}", info.nargs - 1
+        return arg, info.nargs
+    return None
 
 
 async def _command_invoke_wrapper(
@@ -224,9 +269,7 @@ async def _command_invoke_wrapper(
 
     span_name = ctx.info_name
     span_attributes = {
-        PROCESS_COMMAND_ARGS: _redact_argv(
-            sys.argv, *_sensitive_option_spellings(ctx)
-        ),
+        PROCESS_COMMAND_ARGS: _redact_argv(sys.argv, _declared_options(ctx)),
         PROCESS_EXECUTABLE_NAME: sys.argv[0],
         PROCESS_EXIT_CODE: 0,
         PROCESS_PID: os.getpid(),
