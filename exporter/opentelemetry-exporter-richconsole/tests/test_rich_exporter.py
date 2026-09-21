@@ -10,6 +10,7 @@ from opentelemetry.exporter.richconsole import RichConsoleSpanExporter
 from opentelemetry.sdk import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.trace import Status, StatusCode
 
 
 @pytest.fixture(name="span_processor")
@@ -40,6 +41,41 @@ def test_span_exporter(tracer_provider, span_processor, capsys):
     captured = capsys.readouterr()
 
     assert "V4LuE" in captured.out
+
+
+def collect_labels(root: Tree) -> list:
+    labels = [root.label.plain if isinstance(root.label, Text) else root.label]
+    for child in root.children:
+        labels.extend(collect_labels(child))
+    return labels
+
+
+def test_markup_in_span_data_is_not_interpreted():
+    # span data is attacker influenced, so it must be rendered as literal text
+    # rather than parsed as rich console markup (which also raises MarkupError
+    # on unbalanced tags such as "[/]")
+    resource = Resource({"resource[/]key": "resource[/]value"})
+    tracer_provider = trace.TracerProvider(resource=resource)
+    tracer = tracer_provider.get_tracer(__name__)
+
+    span = tracer.start_span("span[/]name")
+    span.set_attribute("key[/]", "value[red]injected[/]")
+    span.add_event("event", {"event.key": "[link=http://evil]click[/link]"})
+    span.set_status(
+        Status(StatusCode.ERROR, description="boom [/] [bold]spoofed[/bold]")
+    )
+    span.end()
+
+    trees = RichConsoleSpanExporter.spans_to_tree((span,))
+    labels = "\n".join(
+        label for tree in trees.values() for label in collect_labels(tree)
+    )
+
+    assert "span[/]name" in labels
+    assert "key[/] : value[red]injected[/]" in labels
+    assert "event.key : [link=http://evil]click[/link]" in labels
+    assert "Description : boom [/] [bold]spoofed[/bold]" in labels
+    assert "resource[/]key : resource[/]value" in labels
 
 
 def walk_tree(root: Tree) -> int:
