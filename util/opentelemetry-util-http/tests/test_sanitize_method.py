@@ -49,3 +49,17 @@ class TestSanitizeMethod(unittest.TestCase):
     def test_nonstandard_method_allowed(self):
         method = sanitize_method("UNKNOWN")
         self.assertEqual(method, "UNKNOWN")
+
+    def test_capture_all_methods_enabled_values(self):
+        env_var = OTEL_PYTHON_INSTRUMENTATION_HTTP_CAPTURE_ALL_METHODS
+        for value in ("1", "true", "TRUE", " True "):
+            with self.subTest(value=value):
+                with patch.dict("os.environ", {env_var: value}):
+                    self.assertEqual(sanitize_method("UNKNOWN"), "UNKNOWN")
+
+    def test_capture_all_methods_disabled_values(self):
+        env_var = OTEL_PYTHON_INSTRUMENTATION_HTTP_CAPTURE_ALL_METHODS
+        for value in ("", "0", "false", "False", "no", "off"):
+            with self.subTest(value=value):
+                with patch.dict("os.environ", {env_var: value}):
+                    self.assertEqual(sanitize_method("UNKNOWN"), "_OTHER")
