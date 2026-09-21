@@ -4,6 +4,7 @@
 """Tests for ToolCallRequest and ToolInvocation inheritance structure"""
 
 import pytest
+from tests.test_utils import patch_env_vars
 
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -176,3 +177,45 @@ def test_start_tool_passes_sampling_attributes_at_span_creation():
         captured_attributes[GenAI.GEN_AI_TOOL_DESCRIPTION]
         == "Gets weather for a location"
     )
+
+
+_TOOL_ARGUMENTS = '{"city":"Paris"}'
+
+
+def _finish_tool_and_get_span_attributes():
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+
+    invocation = handler.start_tool("get_weather", arguments=_TOOL_ARGUMENTS)
+    invocation.stop()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].attributes is not None
+    return spans[0].attributes
+
+
+@patch_env_vars("gen_ai_latest_experimental", "SPAN_ONLY", "false")
+def test_tool_arguments_captured_when_content_capture_enabled():
+    attributes = _finish_tool_and_get_span_attributes()
+    assert attributes[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == _TOOL_ARGUMENTS
+
+
+@patch_env_vars("gen_ai_latest_experimental", "NO_CONTENT", "false")
+def test_tool_arguments_not_captured_when_content_capture_disabled():
+    attributes = _finish_tool_and_get_span_attributes()
+    assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS not in attributes
+
+
+@patch_env_vars("gen_ai_latest_experimental", "EVENT_ONLY", "true")
+def test_tool_arguments_not_captured_when_content_capture_is_event_only():
+    attributes = _finish_tool_and_get_span_attributes()
+    assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS not in attributes
+
+
+@patch_env_vars("default", "SPAN_ONLY", "false")
+def test_tool_arguments_not_captured_outside_experimental_mode():
+    attributes = _finish_tool_and_get_span_attributes()
+    assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS not in attributes

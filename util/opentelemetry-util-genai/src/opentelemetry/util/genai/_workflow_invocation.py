@@ -11,19 +11,18 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.trace import SpanKind, Tracer
-from opentelemetry.util.genai._invocation import Error, GenAIInvocation
+from opentelemetry.util.genai._invocation import (
+    Error,
+    GenAIInvocation,
+    is_content_capture_enabled,
+)
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 from opentelemetry.util.genai.types import (
     InputMessage,
     OutputMessage,
 )
-from opentelemetry.util.genai.utils import (
-    ContentCapturingMode,
-    gen_ai_json_dumps,
-    get_content_capturing_mode,
-    is_experimental_mode,
-)
+from opentelemetry.util.genai.utils import gen_ai_json_dumps
 
 
 class WorkflowInvocation(GenAIInvocation):
@@ -68,10 +67,7 @@ class WorkflowInvocation(GenAIInvocation):
         return attrs
 
     def _get_messages_for_span(self) -> dict[str, Any]:
-        if not is_experimental_mode() or get_content_capturing_mode() not in (
-            ContentCapturingMode.SPAN_ONLY,
-            ContentCapturingMode.SPAN_AND_EVENT,
-        ):
+        if not is_content_capture_enabled(for_span=True):
             return {}
         optional_attrs = (
             (

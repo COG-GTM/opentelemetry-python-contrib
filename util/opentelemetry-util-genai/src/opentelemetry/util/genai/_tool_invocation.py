@@ -10,7 +10,11 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.trace import Tracer
-from opentelemetry.util.genai._invocation import Error, GenAIInvocation
+from opentelemetry.util.genai._invocation import (
+    Error,
+    GenAIInvocation,
+    is_content_capture_enabled,
+)
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 
@@ -30,7 +34,8 @@ class ToolInvocation(GenAIInvocation):
     - gen_ai.tool.call.id: Tool call identifier (Recommended if available)
     - gen_ai.tool.type: Type classification - "function", "extension", or "datastore" (Recommended if available)
     - gen_ai.tool.description: Tool description (Recommended if available)
-    - gen_ai.tool.call.arguments: Parameters passed to tool (Opt-In, may contain sensitive data)
+    - gen_ai.tool.call.arguments: Parameters passed to tool (Opt-In, may contain sensitive data,
+      only set when content capturing is enabled for spans)
     - gen_ai.tool.call.result: Result returned by tool (Opt-In, may contain sensitive data)
     - error.type: Error type if operation failed (Conditionally Required)
     """
@@ -89,12 +94,18 @@ class ToolInvocation(GenAIInvocation):
     def _apply_finish(self, error: Error | None = None) -> None:
         if error is not None:
             self._apply_error_attributes(error)
+        arguments = (
+            self.arguments
+            if self.arguments is not None
+            and is_content_capture_enabled(for_span=True)
+            else None
+        )
         optional_attrs = (
             (GenAI.GEN_AI_TOOL_NAME, self.name),
             (GenAI.GEN_AI_TOOL_CALL_ID, self.tool_call_id),
             (GenAI.GEN_AI_TOOL_TYPE, self.tool_type),
             (GenAI.GEN_AI_TOOL_DESCRIPTION, self.tool_description),
-            (GenAI.GEN_AI_TOOL_CALL_ARGUMENTS, self.arguments),
+            (GenAI.GEN_AI_TOOL_CALL_ARGUMENTS, arguments),
         )
         attributes: dict[str, Any] = {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,

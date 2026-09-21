@@ -176,6 +176,28 @@ class GenAIInvocation(ABC):
         self.stop()
 
 
+def is_content_capture_enabled(*, for_span: bool) -> bool:
+    """Whether content may be captured on spans (``for_span``) or events.
+
+    Content-bearing attributes are Opt-In: they require experimental mode and a
+    content capturing mode that includes the requested signal.
+    """
+    if not is_experimental_mode():
+        return False
+    allowed_modes = (
+        (
+            ContentCapturingMode.SPAN_ONLY,
+            ContentCapturingMode.SPAN_AND_EVENT,
+        )
+        if for_span
+        else (
+            ContentCapturingMode.EVENT_ONLY,
+            ContentCapturingMode.SPAN_AND_EVENT,
+        )
+    )
+    return get_content_capturing_mode() in allowed_modes
+
+
 def get_content_attributes(
     *,
     input_messages: Sequence[InputMessage],
@@ -197,26 +219,13 @@ def get_content_attributes(
     if not is_experimental_mode():
         return {}
 
-    mode = get_content_capturing_mode()
-    allowed_modes = (
-        (
-            ContentCapturingMode.SPAN_ONLY,
-            ContentCapturingMode.SPAN_AND_EVENT,
-        )
-        if for_span
-        else (
-            ContentCapturingMode.EVENT_ONLY,
-            ContentCapturingMode.SPAN_AND_EVENT,
-        )
-    )
-
     def serialize(items: Sequence[Any]) -> Any:
         dicts = [asdict(item) for item in items]
         return gen_ai_json_dumps(dicts) if for_span else dicts
 
     # Tool definitions are always captured, the sem conv recommends adding params / description only
     # when the content capture mode is set..
-    if mode not in allowed_modes:
+    if not is_content_capture_enabled(for_span=for_span):
         return (
             {GenAI.GEN_AI_TOOL_DEFINITIONS: serialize(tool_definitions)}
             if tool_definitions
