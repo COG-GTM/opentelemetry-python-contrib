@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-botocore`: skip Lambda `Invoke` payload trace propagation when the payload is not a JSON object or its `headers` member is not a dict, so instrumentation no longer raises out of `invoke()`
