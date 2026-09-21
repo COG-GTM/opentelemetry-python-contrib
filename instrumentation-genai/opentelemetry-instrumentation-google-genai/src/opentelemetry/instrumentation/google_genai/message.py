@@ -124,8 +124,23 @@ def _to_part(part: genai_types.Part, idx: int) -> MessagePart | None:
             response=response.response,
         )
 
-    _logger.info("Unknown part dropped from telemetry %s", part)
+    _logger.debug(
+        "Unknown part dropped from telemetry, fields: %s", _part_fields(part)
+    )
     return None
+
+
+def _part_fields(part: genai_types.Part) -> list[str]:
+    """Names of the populated fields of a part, without their values.
+
+    Part values can hold user or model content, so only field names are safe to
+    log regardless of the content capturing mode.
+    """
+    return sorted(
+        name
+        for name in type(part).model_fields
+        if getattr(part, name) is not None
+    )
 
 
 def _to_role(role: str | None) -> str:
