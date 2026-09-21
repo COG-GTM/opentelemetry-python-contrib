@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-openai-agents-v2`: make GenAI message content capture opt-in so prompts, completions, system instructions, and tool call payloads are no longer recorded on spans unless content capture is explicitly enabled
