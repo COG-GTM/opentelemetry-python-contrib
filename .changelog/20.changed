@@ -1,0 +1,4 @@
+`opentelemetry-instrumentation-redis` no longer captures the `FT.SEARCH` query text
+and the returned documents' field values by default. Set
+`OTEL_INSTRUMENTATION_REDIS_CAPTURE_SEARCH_CONTENT=true` to opt in to the
+`redis.search.query` and `redis.search.xdoc_*` span attributes.
