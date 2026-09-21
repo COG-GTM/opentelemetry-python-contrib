@@ -267,6 +267,7 @@ from opentelemetry.util.http import (
     normalise_request_header_name,
     normalise_response_header_name,
     normalize_user_agent,
+    redact_query_string,
     redact_url,
     sanitize_method,
 )
@@ -361,7 +362,15 @@ def collect_request_attributes(
     if target:
         path = environ.get("PATH_INFO")
         query = environ.get("QUERY_STRING")
-        _set_http_target(result, target, path, query, sem_conv_opt_in_mode)
+        if query:
+            query = redact_query_string(query)
+        _set_http_target(
+            result,
+            redact_url(target),
+            path,
+            query,
+            sem_conv_opt_in_mode,
+        )
     else:
         # old semconv v1.20.0
         if _report_old(sem_conv_opt_in_mode):
