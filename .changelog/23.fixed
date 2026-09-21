@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-openai-agents-v2`: stop emitting agent definitions, tool definitions and system instructions derived from agent definitions when content capture is disabled
