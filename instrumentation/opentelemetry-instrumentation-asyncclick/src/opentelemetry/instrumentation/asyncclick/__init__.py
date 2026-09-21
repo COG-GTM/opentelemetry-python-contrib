@@ -107,19 +107,73 @@ _SENSITIVE_OPTION_TOKENS = frozenset(
         "token",
     }
 )
+# Names that are sensitive even when written without separators, such as
+# ``--apikey`` or ``--clientsecret``.
+_SENSITIVE_OPTION_SUBSTRINGS = frozenset(
+    {
+        "apikey",
+        "authorization",
+        "credential",
+        "passphrase",
+        "passwd",
+        "password",
+        "secret",
+        "token",
+    }
+)
 
 
 def _is_sensitive_option(option: str) -> bool:
-    tokens = re.split(r"[-_.]", option.lstrip("-").casefold())
-    return not _SENSITIVE_OPTION_TOKENS.isdisjoint(tokens)
+    name = option.lstrip("-").casefold()
+    tokens = re.split(r"[-_.]", name)
+    if not _SENSITIVE_OPTION_TOKENS.isdisjoint(tokens):
+        return True
+    return any(substring in name for substring in _SENSITIVE_OPTION_SUBSTRINGS)
 
 
-def _redact_argv(argv: Sequence[str]) -> tuple[str, ...]:
+def _sensitive_option_spellings(
+    ctx: asyncclick.Context,
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Collect the sensitive option spellings declared by the command.
+
+    The command and its parent groups are inspected so that short aliases
+    (``-p`` for ``--password``) are redacted too. Spellings are returned as two
+    sets: options that consume a value and options that are flags and therefore
+    must not swallow the next argument.
+    """
+    value_options: set[str] = set()
+    flag_options: set[str] = set()
+    node: asyncclick.Context | None = ctx
+    while node is not None:
+        for param in node.command.params:
+            if not isinstance(param, asyncclick.Option):
+                continue
+            spellings = [*param.opts, *param.secondary_opts]
+            if not any(
+                _is_sensitive_option(spelling)
+                for spelling in (param.name or "", *spellings)
+            ):
+                continue
+            if param.is_flag or param.count:
+                flag_options.update(spellings)
+            else:
+                value_options.update(spellings)
+        node = node.parent
+    return frozenset(value_options), frozenset(flag_options)
+
+
+def _redact_argv(
+    argv: Sequence[str],
+    value_options: frozenset[str] = frozenset(),
+    flag_options: frozenset[str] = frozenset(),
+) -> tuple[str, ...]:
     """Redact secrets from command line arguments.
 
-    Values of options whose name looks sensitive (``--password``, ``--token``,
-    ...) are replaced by ``REDACTED``, both in the ``--opt=value`` and in the
-    ``--opt value`` form. Remaining arguments go through
+    Values of options declared as sensitive by the command (``value_options``)
+    or whose name looks sensitive (``--password``, ``--token``, ...) are
+    replaced by ``REDACTED``, in the ``--opt=value``, ``--opt value`` and
+    ``-Ovalue`` forms. Options known to be flags are left untouched, since they
+    carry no value. Remaining arguments go through
     :func:`opentelemetry.util.http.redact_url` so that credentials embedded in
     URLs (such as database DSNs) are redacted as well.
     """
@@ -132,12 +186,22 @@ def _redact_argv(argv: Sequence[str]) -> tuple[str, ...]:
             continue
         if arg.startswith("-"):
             option, separator, _ = arg.partition("=")
-            if _is_sensitive_option(option):
+            if option in flag_options:
+                redacted.append(arg)
+                continue
+            if option in value_options or _is_sensitive_option(option):
                 if separator:
                     redacted.append(f"{option}={_REDACTED}")
                 else:
                     redacted.append(arg)
                     redact_next = True
+                continue
+            if (
+                not arg.startswith("--")
+                and len(arg) > 2
+                and arg[:2] in value_options
+            ):
+                redacted.append(f"{arg[:2]}{_REDACTED}")
                 continue
         redacted.append(redact_url(arg))
     return tuple(redacted)
@@ -160,7 +224,9 @@ async def _command_invoke_wrapper(
 
     span_name = ctx.info_name
     span_attributes = {
-        PROCESS_COMMAND_ARGS: _redact_argv(sys.argv),
+        PROCESS_COMMAND_ARGS: _redact_argv(
+            sys.argv, *_sensitive_option_spellings(ctx)
+        ),
         PROCESS_EXECUTABLE_NAME: sys.argv[0],
         PROCESS_EXIT_CODE: 0,
         PROCESS_PID: os.getpid(),
