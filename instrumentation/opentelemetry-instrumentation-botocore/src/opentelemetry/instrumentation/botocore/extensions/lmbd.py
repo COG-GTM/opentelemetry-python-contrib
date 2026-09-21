@@ -4,6 +4,7 @@
 import abc
 import inspect
 import json
+import logging
 import re
 from typing import Dict
 
@@ -20,6 +21,8 @@ from opentelemetry.semconv._incubating.attributes.faas_attributes import (
     FAAS_INVOKED_REGION,
 )
 from opentelemetry.trace.span import Span
+
+_logger = logging.getLogger(__name__)
 
 
 class _LambdaOperation(abc.ABC):
@@ -79,12 +82,21 @@ class _OpInvoke(_LambdaOperation):
         # TODO: reconsider propagation via payload as it manipulates input of the called lambda function
         try:
             payload = json.loads(payload_str)
+            if not isinstance(payload, dict):
+                return
+
             headers = payload.get("headers", {})
+            if not isinstance(headers, dict):
+                return
+
             inject(headers)
             payload["headers"] = headers
             call_context.params["Payload"] = json.dumps(payload)
-        except ValueError:
-            pass
+        except Exception:  # pylint: disable=broad-exception-caught
+            _logger.debug(
+                "Failed to inject trace context into Lambda payload",
+                exc_info=True,
+            )
 
 
 ################################################################################
