@@ -1,0 +1,1 @@
+`opentelemetry-util-http`: strip the query string and fragment before matching excluded URL patterns so they cannot be used to match an otherwise traced URL
