@@ -99,6 +99,21 @@ Request/Response Hooks
     client = redis.StrictRedis(host="localhost", port=6379)
     client.get("my-key")
 
+Capture Search Content
+----------------------
+
+Spans for ``FT.SEARCH`` commands record the index name and the number of
+returned documents. The search query text and the field values of the returned
+documents are not captured by default, since they may contain sensitive data.
+Set the environment variable
+``OTEL_INSTRUMENTATION_REDIS_CAPTURE_SEARCH_CONTENT`` to ``true`` to opt in to
+capturing them as the ``redis.search.query`` and ``redis.search.xdoc_*``
+attributes.
+
+.. code:: sh
+
+    export OTEL_INSTRUMENTATION_REDIS_CAPTURE_SEARCH_CONTENT=true
+
 Suppress Instrumentation
 ------------------------
 

@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import os
 from time import time_ns
+from unittest import mock
 
 import redis
 import redis.asyncio
@@ -16,6 +18,9 @@ from redis.exceptions import ResponseError
 
 from opentelemetry import trace
 from opentelemetry.instrumentation.redis import RedisInstrumentor
+from opentelemetry.instrumentation.redis.environment_variables import (
+    OTEL_INSTRUMENTATION_REDIS_CAPTURE_SEARCH_CONTENT,
+)
 from opentelemetry.semconv._incubating.attributes.db_attributes import (
     DB_REDIS_DATABASE_INDEX,
     DB_STATEMENT,
@@ -673,6 +678,20 @@ class TestRedisearchInstrument(TestBase):
         assert "redis.create_index.fields" in span.attributes
 
     def test_redis_query(self):
+        query = "@name:test"
+        self.redis_client.ft("idx:test_vss").search(Query(query))
+
+        spans = self.memory_exporter.get_finished_spans()
+        span = next(span for span in spans if span.name == "redis.search")
+
+        assert "redis.search.query" not in span.attributes
+        assert span.attributes.get("redis.search.total") == 1
+
+    @mock.patch.dict(
+        os.environ,
+        {OTEL_INSTRUMENTATION_REDIS_CAPTURE_SEARCH_CONTENT: "true"},
+    )
+    def test_redis_query_capture_content(self):
         query = "@name:test"
         self.redis_client.ft("idx:test_vss").search(Query(query))
 

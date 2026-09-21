@@ -22,7 +22,11 @@ from opentelemetry.instrumentation._semconv import (
     _OpenTelemetrySemanticConventionStability,
 )
 from opentelemetry.instrumentation.redis import RedisInstrumentor
+from opentelemetry.instrumentation.redis.environment_variables import (
+    OTEL_INSTRUMENTATION_REDIS_CAPTURE_SEARCH_CONTENT,
+)
 from opentelemetry.instrumentation.redis.util import (
+    _add_search_attributes,
     _build_span_meta_data_for_pipeline,
 )
 from opentelemetry.instrumentation.utils import suppress_instrumentation
@@ -1749,3 +1753,43 @@ class TestBuildSpanMetaDataForPipeline(TestBase):
         self.assertEqual(command_stack, [])
         self.assertEqual(resource, "")
         self.assertEqual(span_name, "redis")
+
+
+class TestSearchAttributes(TestBase):
+    search_args = ("FT.SEARCH", "idx:test", "@name:alice")
+    search_response = [
+        1,
+        "test:001",
+        ["name", "alice", "ssn", "123-45-6789"],
+    ]
+
+    def _search_attributes(self):
+        span = mock.Mock()
+        attributes = {}
+        span.set_attribute.side_effect = attributes.__setitem__
+        _add_search_attributes(span, self.search_response, self.search_args)
+        return attributes
+
+    def test_search_content_not_captured_by_default(self):
+        attributes = self._search_attributes()
+
+        self.assertEqual(attributes["redis.search.index"], "idx:test")
+        self.assertEqual(attributes["redis.search.total"], 1)
+        self.assertNotIn("redis.search.query", attributes)
+        self.assertNotIn("redis.search.xdoc_test:001.name", attributes)
+        self.assertNotIn("redis.search.xdoc_test:001.ssn", attributes)
+
+    @patch.dict(
+        os.environ,
+        {OTEL_INSTRUMENTATION_REDIS_CAPTURE_SEARCH_CONTENT: "true"},
+    )
+    def test_search_content_captured_when_opted_in(self):
+        attributes = self._search_attributes()
+
+        self.assertEqual(attributes["redis.search.index"], "idx:test")
+        self.assertEqual(attributes["redis.search.total"], 1)
+        self.assertEqual(attributes["redis.search.query"], "@name:alice")
+        self.assertEqual(attributes["redis.search.xdoc_test:001.name"], "alice")
+        self.assertEqual(
+            attributes["redis.search.xdoc_test:001.ssn"], "123-45-6789"
+        )

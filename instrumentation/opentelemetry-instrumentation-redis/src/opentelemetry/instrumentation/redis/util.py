@@ -7,6 +7,7 @@ Some utils used by the redis integration
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry.instrumentation._semconv import (
@@ -15,6 +16,9 @@ from opentelemetry.instrumentation._semconv import (
     _set_http_net_peer_name_client,
     _set_http_peer_port_client,
     _set_net_transport,
+)
+from opentelemetry.instrumentation.redis.environment_variables import (
+    OTEL_INSTRUMENTATION_REDIS_CAPTURE_SEARCH_CONTENT,
 )
 from opentelemetry.semconv.attributes.network_attributes import (
     NetworkTransportValues,
@@ -172,13 +176,22 @@ def _add_create_attributes(span: Span, args: tuple[Any, ...]):
     )
 
 
+def _is_search_content_capture_enabled() -> bool:
+    capture_content = os.environ.get(
+        OTEL_INSTRUMENTATION_REDIS_CAPTURE_SEARCH_CONTENT, "false"
+    )
+    return capture_content.strip().lower() == "true"
+
+
 def _add_search_attributes(span: Span, response, args):
+    capture_content = _is_search_content_capture_enabled()
     _set_span_attribute_if_value(
         span, "redis.search.index", _value_or_none(args, 1)
     )
-    _set_span_attribute_if_value(
-        span, "redis.search.query", _value_or_none(args, 2)
-    )
+    if capture_content:
+        _set_span_attribute_if_value(
+            span, "redis.search.query", _value_or_none(args, 2)
+        )
     # Parse response from search
     # https://redis.io/docs/latest/commands/ft.search/
     # Response in format:
@@ -189,7 +202,11 @@ def _add_search_attributes(span: Span, response, args):
     _set_span_attribute_if_value(
         span, "redis.search.total", number_of_returned_documents
     )
-    if "NOCONTENT" in args or not number_of_returned_documents:
+    if (
+        not capture_content
+        or "NOCONTENT" in args
+        or not number_of_returned_documents
+    ):
         return
     for document_number in range(number_of_returned_documents):
         document_index = _value_or_none(response, 1 + 2 * document_number)
