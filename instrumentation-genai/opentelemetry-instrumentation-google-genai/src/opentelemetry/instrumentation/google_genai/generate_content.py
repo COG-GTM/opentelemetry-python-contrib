@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # pylint: disable=too-many-lines
 
+import asyncio
 import copy
 import dataclasses
 import functools
@@ -10,6 +11,7 @@ import logging
 import os
 import time
 import typing
+import weakref
 from typing import Any, AsyncIterator, Awaitable, Iterator, Optional, Union
 
 from google.genai.models import AsyncModels, Models
@@ -317,12 +319,56 @@ def _to_tool_definition(tool: ToolUnionDict) -> list[ToolDefinition]:
     return _to_tool_definition_common(tool)
 
 
+# Tool definitions are only used for telemetry, so each MCP session is listed
+# at most once instead of issuing a `tools/list` RPC on every model call.
+_mcp_session_tool_definitions: weakref.WeakKeyDictionary[
+    Any, list[ToolDefinition]
+] = weakref.WeakKeyDictionary()
+# In-flight listings, shared by overlapping calls that use the same session.
+_mcp_session_pending_listings: weakref.WeakKeyDictionary[
+    Any, asyncio.Future[list[ToolDefinition]]
+] = weakref.WeakKeyDictionary()
+
+
+async def _list_mcp_session_tool_definitions(
+    session: McpClientSession,
+) -> list[ToolDefinition]:
+    result = await session.list_tools()
+    definitions = [_model_dump_to_tool_definition(t) for t in result.tools]
+    _mcp_session_tool_definitions[session] = definitions
+    return definitions
+
+
+async def _mcp_session_to_tool_definitions(
+    session: McpClientSession,
+) -> list[ToolDefinition]:
+    definitions = _mcp_session_tool_definitions.get(session)
+    if definitions is None:
+        pending = _mcp_session_pending_listings.get(session)
+        if pending is None:
+            pending = asyncio.ensure_future(
+                _list_mcp_session_tool_definitions(session)
+            )
+            _mcp_session_pending_listings[session] = pending
+
+            def _on_listing_done(
+                future: asyncio.Future[list[ToolDefinition]],
+            ) -> None:
+                _mcp_session_pending_listings.pop(session, None)
+                if not future.cancelled():
+                    # Mark the exception as retrieved if every waiter was cancelled.
+                    future.exception()
+
+            pending.add_done_callback(_on_listing_done)
+        definitions = await asyncio.shield(pending)
+    return copy.deepcopy(definitions)
+
+
 async def _to_tool_definition_async(
     tool: ToolUnionDict,
 ) -> list[ToolDefinition]:
     if _is_mcp_imported and isinstance(tool, McpClientSession):
-        result = await tool.list_tools()
-        return [_model_dump_to_tool_definition(t) for t in result.tools]
+        return await _mcp_session_to_tool_definitions(tool)
 
     return _to_tool_definition_common(tool)
 
@@ -682,15 +728,17 @@ class _GenerateContentInstrumentationHelper:
         if not self.experimental_sem_convs_enabled:
             return []
 
-        tool_definitions = []
         if tools := _config_to_tools(config):
-            for tool in tools:
-                definitions = await _to_tool_definition_async(tool)
-                for de in definitions:
-                    if de:
-                        tool_definitions.append(de)
-
-        return tool_definitions
+            definitions_per_tool = await asyncio.gather(
+                *(_to_tool_definition_async(tool) for tool in tools)
+            )
+            return [
+                de
+                for definitions in definitions_per_tool
+                for de in definitions
+                if de
+            ]
+        return []
 
     def _maybe_log_completion_details_in_log(
         self,
