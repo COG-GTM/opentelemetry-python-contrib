@@ -9,7 +9,10 @@ import psycopg2.sql
 
 import opentelemetry.instrumentation.psycopg2
 from opentelemetry import trace
-from opentelemetry.instrumentation.psycopg2 import Psycopg2Instrumentor
+from opentelemetry.instrumentation.psycopg2 import (
+    CursorTracer,
+    Psycopg2Instrumentor,
+)
 from opentelemetry.sdk import resources
 from opentelemetry.test.test_base import TestBase
 
@@ -156,6 +159,27 @@ class TestPostgresqlIntegration(TestBase):
         self.assertEqual(spans_list[0].name, "INSERT")
         self.assertEqual(spans_list[1].name, "INSERT")
         self.assertEqual(spans_list[2].name, "UPDATE")
+
+    def test_get_operation_name_splits_only_first_token(self) -> None:
+        tracer = CursorTracer(mock.Mock())
+        split_calls = []
+
+        class RecordingStr(str):
+            def split(self, *args, **kwargs):
+                split_calls.append((args, kwargs))
+                return super().split(*args, **kwargs)
+
+        statement = "INSERT INTO test VALUES (1, 'a'), (2, 'b')"
+        # pylint: disable=protected-access
+        tracer._leading_comment_remover = mock.Mock()
+        tracer._leading_comment_remover.sub.return_value = RecordingStr(
+            statement
+        )
+
+        self.assertEqual(
+            tracer.get_operation_name(mock.Mock(), (statement,)), "INSERT"
+        )
+        self.assertEqual(split_calls, [((), {"maxsplit": 1})])
 
     # pylint: disable=unused-argument
     def test_not_recording(self):
