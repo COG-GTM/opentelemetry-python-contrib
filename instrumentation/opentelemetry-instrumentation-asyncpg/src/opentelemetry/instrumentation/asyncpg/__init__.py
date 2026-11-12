@@ -229,7 +229,9 @@ class AsyncPGInstrumentor(BaseInstrumentor):
 
         try:
             # Strip leading comments so we get the operation name.
-            name = self._leading_comment_remover.sub("", name).split()[0]
+            name = self._leading_comment_remover.sub("", name).split(
+                maxsplit=1
+            )[0]
         except IndexError:
             name = ""
 
@@ -271,7 +273,9 @@ class AsyncPGInstrumentor(BaseInstrumentor):
 
         try:
             # Strip leading comments so we get the operation name.
-            name = self._leading_comment_remover.sub("", name).split()[0]
+            name = self._leading_comment_remover.sub("", name).split(
+                maxsplit=1
+            )[0]
         except IndexError:
             name = ""
 
@@ -314,7 +318,9 @@ class AsyncPGInstrumentor(BaseInstrumentor):
         query = instance._query or ""
 
         try:
-            name = self._leading_comment_remover.sub("", query).split()[0]
+            name = self._leading_comment_remover.sub("", query).split(
+                maxsplit=1
+            )[0]
         except IndexError:
             name = ""
 
