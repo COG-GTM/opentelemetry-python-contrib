@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-tortoiseorm`: derive the span name from only the first SQL token instead of splitting the whole statement on every query
