@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from functools import lru_cache
 from logging import getLogger
 from typing import Callable, Dict, List, Optional
 
@@ -125,6 +126,21 @@ _kafka_getter = KafkaContextGetter()
 _kafka_setter = KafkaContextSetter()
 
 
+@lru_cache(maxsize=128)
+def _json_dumps_cached(bootstrap_servers) -> str:
+    return json.dumps(bootstrap_servers)
+
+
+def _serialize_bootstrap_servers(bootstrap_servers) -> str:
+    if isinstance(bootstrap_servers, str):
+        return _json_dumps_cached(bootstrap_servers)
+    if isinstance(bootstrap_servers, (list, tuple)) and all(
+        isinstance(server, str) for server in bootstrap_servers
+    ):
+        return _json_dumps_cached(tuple(bootstrap_servers))
+    return json.dumps(bootstrap_servers)
+
+
 def _enrich_span(
     span, bootstrap_servers: List[str], topic: str, partition: int
 ):
@@ -133,7 +149,8 @@ def _enrich_span(
         span.set_attribute(SpanAttributes.MESSAGING_DESTINATION, topic)
         span.set_attribute(SpanAttributes.MESSAGING_KAFKA_PARTITION, partition)
         span.set_attribute(
-            SpanAttributes.MESSAGING_URL, json.dumps(bootstrap_servers)
+            SpanAttributes.MESSAGING_URL,
+            _serialize_bootstrap_servers(bootstrap_servers),
         )
 
 

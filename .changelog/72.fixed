@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-kafka-python`: cache the JSON encoding of `bootstrap_servers` used for `messaging.url` instead of re-encoding it for every produced/consumed message
