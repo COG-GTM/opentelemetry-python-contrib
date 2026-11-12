@@ -1,0 +1,1 @@
+Use integer arithmetic instead of `Decimal` in the X-Ray remote sampler `_RateLimiter` to reduce per-span sampling overhead
