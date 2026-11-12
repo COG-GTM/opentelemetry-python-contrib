@@ -723,6 +723,7 @@ class CursorTracer(Generic[CursorT]):
         )
         self._connect_module = self._db_api_integration.connect_module
         self._leading_comment_remover = re.compile(r"^/\*.*?\*/")
+        self._first_token = re.compile(r"\s*(\S+)")
 
     def _capture_mysql_version(self, cursor) -> None:
         """Lazy capture of mysql-connector client version using cursor, if applicable"""
@@ -826,16 +827,20 @@ class CursorTracer(Generic[CursorT]):
         query = args[0]
         if isinstance(query, _Template):
             first_literal = query.strings[0] if query.strings else ""
-            tokens = self._leading_comment_remover.sub(
-                "", first_literal
-            ).split()
-            return tokens[0] if tokens else ""
+            return self._first_word(first_literal)
 
         # `query` can be an empty string. See #2643
         if query and isinstance(query, str):
-            # Strip leading comments so we get the operation name.
-            return self._leading_comment_remover.sub("", query).split()[0]
+            return self._first_word(query)
         return ""
+
+    def _first_word(self, query: str) -> str:
+        # Skip a leading comment and read only the first token, so the cost
+        # does not grow with the length of the statement.
+        comment = self._leading_comment_remover.match(query)
+        start = comment.end() if comment else 0
+        token = self._first_token.match(query, start)
+        return token.group(1) if token else ""
 
     def get_statement(self, cursor: CursorT, args: Sequence[Any]) -> str:  # pylint: disable=no-self-use
         if not args:
