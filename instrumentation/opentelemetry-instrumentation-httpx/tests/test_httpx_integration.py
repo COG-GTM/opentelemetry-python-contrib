@@ -243,10 +243,14 @@ class BaseTestCases:
             url_parses = []
             helper_args = {}
 
-            def track_url_parses(name):
+            def track_url_parses(
+                name: str,
+            ) -> typing.Callable[..., typing.Any]:
                 helper = getattr(instrumentation, name)
 
-                def wrapper(*args, **kwargs):
+                def wrapper(
+                    *args: typing.Any, **kwargs: typing.Any
+                ) -> typing.Any:
                     helper_args[name] = args
                     with mock.patch.object(
                         httpx.URL,
