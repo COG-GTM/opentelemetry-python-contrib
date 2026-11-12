@@ -120,7 +120,9 @@ class _DjangoMiddleware:
         "opentelemetry-instrumentor-django.duration_attr_key"
     )
     _environ_timer_key = "opentelemetry-instrumentor-django.timer_key"
-    _environ_excluded_key = "opentelemetry-instrumentor-django.excluded_key"
+    _environ_excluded_key: str = (
+        "opentelemetry-instrumentor-django.excluded_key"
+    )
     _traced_request_attrs = get_traced_request_attrs("DJANGO")
     _excluded_urls = get_excluded_urls("DJANGO")
     _tracer = None
@@ -143,7 +145,7 @@ class _DjangoMiddleware:
         response = self.get_response(request)
         return self.process_response(request, response)
 
-    def _is_excluded(self, request) -> bool:
+    def _is_excluded(self, request: HttpRequest) -> bool:
         if not getattr(self._excluded_urls, "_excluded_urls", True):
             return False
         excluded = request.META.get(self._environ_excluded_key)
