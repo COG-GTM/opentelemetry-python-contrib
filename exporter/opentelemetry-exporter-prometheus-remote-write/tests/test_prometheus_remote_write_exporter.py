@@ -272,7 +272,7 @@ class TestValidation(unittest.TestCase):
 
 
 # Ensures export is successful with valid export_records and config
-@patch("requests.post")
+@patch("requests.Session.post")
 def test_valid_export(mock_post, prom_rw, metric):
     mock_post.return_value.configure_mock(**{"status_code": 200})
 
@@ -300,12 +300,32 @@ def test_invalid_export(prom_rw):
     assert result == MetricExportResult.FAILURE
 
 
-@patch("requests.post")
+@patch("requests.Session.post")
 def test_valid_send_message(mock_post, prom_rw):
     mock_post.return_value.configure_mock(**{"ok": True})
     result = prom_rw._send_message(bytes(), {})
     assert mock_post.call_count == 1
     assert result == MetricExportResult.SUCCESS
+
+
+@patch("requests.post")
+@patch("requests.Session.post")
+def test_send_message_reuses_session(mock_session_post, mock_post, prom_rw):
+    mock_session_post.return_value.configure_mock(**{"ok": True})
+    session = prom_rw._session
+
+    assert prom_rw._send_message(bytes(), {}) == MetricExportResult.SUCCESS
+    assert prom_rw._send_message(bytes(), {}) == MetricExportResult.SUCCESS
+
+    assert prom_rw._session is session
+    assert mock_session_post.call_count == 2
+    mock_post.assert_not_called()
+
+
+def test_shutdown_closes_session(prom_rw):
+    with patch.object(prom_rw._session, "close") as mock_close:
+        prom_rw.shutdown()
+    mock_close.assert_called_once_with()
 
 
 def test_invalid_send_message(prom_rw):

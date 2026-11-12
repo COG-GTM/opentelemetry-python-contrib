@@ -76,6 +76,7 @@ class PrometheusRemoteWriteMetricsExporter(MetricExporter):
         self.tls_config = tls_config
         self.proxies = proxies
         self.resources_as_labels = resources_as_labels
+        self._session = requests.Session()
 
         if not preferred_temporality:
             preferred_temporality = {
@@ -379,7 +380,7 @@ class PrometheusRemoteWriteMetricsExporter(MetricExporter):
                     self.tls_config["key_file"],
                 )
         try:
-            response = requests.post(
+            response = self._session.post(
                 self.endpoint,
                 data=message,
                 headers=headers,
@@ -400,4 +401,4 @@ class PrometheusRemoteWriteMetricsExporter(MetricExporter):
         return True
 
     def shutdown(self, timeout_millis: float = 30_000, **kwargs) -> None:
-        pass
+        self._session.close()
