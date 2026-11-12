@@ -610,12 +610,14 @@ def test_unsampled_child_still_feeds_recording_agent(processor_setup):
         for span in exporter.get_finished_spans()
         if span.name == "invoke_agent agent"
     )
-    assert json.loads(agent_span.attributes[sp.GEN_AI_INPUT_MESSAGES]) == [
+    input_raw = agent_span.attributes["gen_ai.input.messages"]
+    output_raw = agent_span.attributes["gen_ai.output.messages"]
+    assert isinstance(input_raw, str)
+    assert isinstance(output_raw, str)
+    assert json.loads(input_raw) == [
         {"role": "user", "parts": [{"type": "text", "content": "question"}]}
     ]
-    output_messages = json.loads(
-        agent_span.attributes[sp.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_messages = json.loads(output_raw)
     assert [msg["parts"] for msg in output_messages] == [
         [{"type": "text", "content": "answer"}]
     ]
