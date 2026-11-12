@@ -287,9 +287,13 @@ class Boto3SQSInstrumentor(BaseInstrumentor):
     def _wrap_receive_message(self, sqs_class: type) -> None:
         def receive_message_wrapper(wrapped, instance, args, kwargs):
             queue_url = kwargs.get("QueueUrl")
-            message_attribute_names = kwargs.pop("MessageAttributeNames", [])
+            message_attribute_names = list(
+                kwargs.pop("MessageAttributeNames", [])
+            )
             message_attribute_names.extend(
-                propagate.get_global_textmap().fields
+                field
+                for field in propagate.get_global_textmap().fields
+                if field not in message_attribute_names
             )
             queue_name = Boto3SQSInstrumentor._extract_queue_name_from_url(
                 queue_url
