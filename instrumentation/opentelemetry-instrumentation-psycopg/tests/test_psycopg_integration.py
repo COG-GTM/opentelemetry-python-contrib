@@ -405,6 +405,59 @@ class TestPostgresqlIntegration(PostgresqlIntegrationTestMixin, TestBase):
                 span.attributes["db.statement"], query.as_string(None)
             )
 
+    def test_composed_query_with_sqlcommenter(self):
+        PsycopgInstrumentor().instrument(enable_commenter=True)
+        cnx = psycopg.connect(database="test")
+        cursor = cnx.cursor()
+        MockCursor.execute.reset_mock()
+        query = SQL("SELECT {} FROM test").format(SQL("*"))
+
+        with mock.patch.object(
+            Composed,
+            "as_string",
+            autospec=True,
+            side_effect=Composed.as_string,
+        ) as as_string:
+            cursor.execute(query)
+            # one render shared by the span name and db.statement, one by
+            # the sqlcommenter rewrite of the executed query
+            self.assertEqual(as_string.call_count, 2)
+
+        called_query = MockCursor.execute.call_args[0][0]
+        self.assertRegex(
+            called_query, r"^SELECT \* FROM test /\*.*traceparent=.*\*/$"
+        )
+        spans_list = self.memory_exporter.get_finished_spans()
+        self.assertEqual(len(spans_list), 1)
+        self.assertEqual(spans_list[0].name, "SELECT")
+        self.assertEqual(
+            spans_list[0].attributes["db.statement"], "SELECT * FROM test"
+        )
+
+    def test_composed_query_not_cached_outside_traced_execution(self):
+        tracer = opentelemetry.instrumentation.psycopg.CursorTracer(
+            mock.Mock()
+        )
+        cursor = mock.Mock(connection=None)
+        query = SQL("SELECT {} FROM test").format(SQL("*"))
+
+        with mock.patch.object(
+            Composed,
+            "as_string",
+            autospec=True,
+            side_effect=["SELECT * FROM a", "SELECT * FROM b"],
+        ) as as_string:
+            self.assertEqual(
+                tracer.get_statement(cursor, [query]), "SELECT * FROM a"
+            )
+            self.assertEqual(
+                tracer.get_statement(cursor, [query]), "SELECT * FROM b"
+            )
+            self.assertEqual(as_string.call_count, 2)
+        self.assertIsNone(
+            opentelemetry.instrumentation.psycopg._RENDERED_COMPOSABLE.get()
+        )
+
     def test_composed_query_operation_name(self):
         PsycopgInstrumentor().instrument()
         cnx = psycopg.connect(database="test")
@@ -662,13 +715,19 @@ class TestPostgresqlIntegrationAsync(
         ):
             async with cnx.cursor() as cursor:
                 await cursor.execute(query)
-            self.assertEqual(as_string.call_count, 1)
+                self.assertEqual(as_string.call_count, 1)
+                await cursor.execute(query)
+                self.assertEqual(as_string.call_count, 2)
 
         spans_list = self.memory_exporter.get_finished_spans()
-        self.assertEqual(len(spans_list), 1)
-        self.assertEqual(spans_list[0].name, "SELECT")
-        self.assertEqual(
-            spans_list[0].attributes["db.statement"], "SELECT * FROM test"
+        self.assertEqual(len(spans_list), 2)
+        for span in spans_list:
+            self.assertEqual(span.name, "SELECT")
+            self.assertEqual(
+                span.attributes["db.statement"], "SELECT * FROM test"
+            )
+        self.assertIsNone(
+            opentelemetry.instrumentation.psycopg._RENDERED_COMPOSABLE.get()
         )
 
     async def test_span_params_attribute(self):
