@@ -31,6 +31,7 @@ from opentelemetry.instrumentation.google_genai.generate_content import (
 from opentelemetry.sdk.trace import Span as SdkSpan
 from opentelemetry.semconv._incubating.attributes import gen_ai_attributes
 from opentelemetry.util.genai.types import ContentCapturingMode
+from opentelemetry.util.genai.utils import gen_ai_json_dumps
 
 from .base import TestCase
 
@@ -924,11 +925,16 @@ class NonStreamingTestCase(TestCase):
             "opentelemetry.instrumentation.google_genai.generate_content._create_completion_details_attributes",
             wraps=_create_completion_details_attributes,
         )
+        json_dumps_spy = patch(
+            "opentelemetry.instrumentation.google_genai.generate_content.gen_ai_json_dumps",
+            wraps=gen_ai_json_dumps,
+        )
         with (
             patched_environ,
             patched_otel_mapping,
             patched_is_recording,
             spy as create_attributes,
+            json_dumps_spy as json_dumps,
         ):
             self.configure_valid_response(text="Some response")
             self.generate_content(
@@ -936,6 +942,7 @@ class NonStreamingTestCase(TestCase):
                 contents="Some input",
                 config=GenerateContentConfig(
                     system_instruction="System instruction",
+                    tools=[_mock_callable_tool],
                 ),
             )
             capture_in_span = recording and mode in [
@@ -969,6 +976,10 @@ class NonStreamingTestCase(TestCase):
                         self.assertIn(key, attributes)
                     else:
                         self.assertNotIn(key, attributes)
+            if recording:
+                self.assertIn(GEN_AI_TOOL_DEFINITIONS, span.attributes)
+            else:
+                json_dumps.assert_not_called()
 
     def test_new_semconv_log_has_extra_genai_attributes(self):
         patched_environ = patch.dict(
