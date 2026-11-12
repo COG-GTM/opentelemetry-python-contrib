@@ -237,6 +237,76 @@ class BaseTestCases:
                 span, opentelemetry.instrumentation.httpx
             )
 
+        def test_request_url_not_reparsed(self):
+            instrumentation = opentelemetry.instrumentation.httpx
+            url_init = httpx.URL.__init__
+            url_parses = []
+            helper_args = {}
+
+            def track_url_parses(
+                name: str,
+            ) -> typing.Callable[..., typing.Any]:
+                helper = getattr(instrumentation, name)
+
+                def wrapper(
+                    *args: typing.Any, **kwargs: typing.Any
+                ) -> typing.Any:
+                    helper_args[name] = args
+                    with mock.patch.object(
+                        httpx.URL,
+                        "__init__",
+                        autospec=True,
+                        side_effect=url_init,
+                    ) as init_mock:
+                        try:
+                            return helper(*args, **kwargs)
+                        finally:
+                            url_parses.extend(init_mock.call_args_list)
+
+                return wrapper
+
+            with (
+                mock.patch.object(
+                    instrumentation,
+                    "_extract_parameters",
+                    track_url_parses("_extract_parameters"),
+                ),
+                mock.patch.object(
+                    instrumentation,
+                    "_apply_request_client_attributes_to_span",
+                    track_url_parses(
+                        "_apply_request_client_attributes_to_span"
+                    ),
+                ),
+            ):
+                self.perform_request(self.URL)
+
+            span = self.assert_span()
+            self.assertEqual(span.attributes[HTTP_URL], self.URL)
+            request = helper_args["_extract_parameters"][0][0]
+            if not isinstance(request, httpx.Request):
+                self.skipTest("httpx < 0.20 passes the URL as a raw tuple")
+            self.assertEqual(url_parses, [])
+            apply_args = helper_args[
+                "_apply_request_client_attributes_to_span"
+            ]
+            self.assertIs(apply_args[2], request.url)
+            self.assertEqual(apply_args[9], self.URL)
+
+        def test_headers_not_normalized_when_capture_disabled(self):
+            with mock.patch(
+                "opentelemetry.instrumentation.httpx._normalize_headers"
+            ) as normalize_mock:
+                self.perform_request(
+                    self.URL, headers={"X-Custom-Request": "value"}
+                )
+
+            span = self.assert_span()
+            self.assertIsNone(
+                span.attributes.get("http.request.header.x_custom_request")
+            )
+            normalize_mock.assert_not_called()
+
         def test_basic_metrics(self):
             self.perform_request(self.URL)
             metrics = self.get_sorted_metrics(SCOPE)

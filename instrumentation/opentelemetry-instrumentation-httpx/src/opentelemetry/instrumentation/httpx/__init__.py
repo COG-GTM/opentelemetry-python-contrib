@@ -504,7 +504,7 @@ def _extract_parameters(
         # In httpx >= 0.20.0, handle_request receives a Request object
         request = typing.cast("httpx.Request", args[0])
         method = request.method.encode()
-        url = typing.cast("httpx.URL", module.URL(str(request.url)))
+        url = request.url
         headers = request.headers
         stream = request.stream
         extensions = request.extensions
@@ -611,8 +611,15 @@ def _apply_request_client_attributes_to_span(
     headers: httpx.Headers | dict[str, list[str] | str] | None = None,
     captured_headers: list[str] | None = None,
     sensitive_headers: list[str] | None = None,
+    url_str: str | None = None,
 ):
-    url = typing.cast("httpx.URL", module.URL(url))
+    if isinstance(url, module.URL):
+        if url_str is None:
+            url_str = str(url)
+    else:
+        url = module.URL(url)
+        url_str = str(url)
+    url = typing.cast("httpx.URL", url)
     # http semconv transition: http.method -> http.request.method
     _set_http_method(
         span_attributes,
@@ -622,7 +629,7 @@ def _apply_request_client_attributes_to_span(
     )
 
     # http semconv transition: http.url -> url.full
-    _set_http_url(span_attributes, redact_url(str(url)), semconv)
+    _set_http_url(span_attributes, redact_url(url_str), semconv)
 
     # Set HTTP method in metric labels
     _set_http_method(
@@ -632,14 +639,15 @@ def _apply_request_client_attributes_to_span(
         semconv,
     )
 
-    span_attributes.update(
-        get_custom_header_attributes(
-            _normalize_headers(headers, module),
-            captured_headers,
-            sensitive_headers,
-            normalise_request_header_name,
+    if captured_headers:
+        span_attributes.update(
+            get_custom_header_attributes(
+                _normalize_headers(headers, module),
+                captured_headers,
+                sensitive_headers,
+                normalise_request_header_name,
+            )
         )
-    )
 
     if _report_old(semconv):
         # TODO: Support opt-in for url.scheme in new semconv
@@ -685,14 +693,15 @@ def _apply_response_client_attributes_to_span(
     http_status_code = http_status_to_status_code(status_code)
     span.set_status(http_status_code)
 
-    span.set_attributes(
-        get_custom_header_attributes(
-            _normalize_headers(headers, module),
-            captured_headers,
-            sensitive_headers,
-            normalise_response_header_name,
+    if captured_headers:
+        span.set_attributes(
+            get_custom_header_attributes(
+                _normalize_headers(headers, module),
+                captured_headers,
+                sensitive_headers,
+                normalise_response_header_name,
+            )
         )
-    )
 
     if http_status_code == StatusCode.ERROR and _report_new(semconv):
         # http semconv transition: new error.type
@@ -837,9 +846,8 @@ class _SyncOpenTelemetryTransportBase:
             args, kwargs, self._module
         )
 
-        if self._excluded_urls and self._excluded_urls.url_disabled(
-            _normalize_url(url)
-        ):
+        url_str = _normalize_url(url)
+        if self._excluded_urls and self._excluded_urls.url_disabled(url_str):
             return self._transport.handle_request(*args, **kwargs)
 
         method_original = method.decode()
@@ -857,6 +865,7 @@ class _SyncOpenTelemetryTransportBase:
             headers,
             self._captured_request_headers,
             self._sensitive_headers,
+            url_str,
         )
 
         request_info = RequestInfo(method, url, headers, stream, extensions)
@@ -1054,9 +1063,8 @@ class _AsyncOpenTelemetryTransportBase:
             args, kwargs, self._module
         )
 
-        if self._excluded_urls and self._excluded_urls.url_disabled(
-            _normalize_url(url)
-        ):
+        url_str = _normalize_url(url)
+        if self._excluded_urls and self._excluded_urls.url_disabled(url_str):
             return await self._transport.handle_async_request(*args, **kwargs)
 
         method_original = method.decode()
@@ -1074,6 +1082,7 @@ class _AsyncOpenTelemetryTransportBase:
             headers,
             self._captured_request_headers,
             self._sensitive_headers,
+            url_str,
         )
 
         request_info = RequestInfo(method, url, headers, stream, extensions)
@@ -1344,7 +1353,8 @@ class _BaseHTTPXClientInstrumentor(BaseInstrumentor):
             args, kwargs, module
         )
 
-        if excluded_urls and excluded_urls.url_disabled(_normalize_url(url)):
+        url_str = _normalize_url(url)
+        if excluded_urls and excluded_urls.url_disabled(url_str):
             return wrapped(*args, **kwargs)
 
         method_original = method.decode()
@@ -1362,6 +1372,7 @@ class _BaseHTTPXClientInstrumentor(BaseInstrumentor):
             headers,
             captured_request_headers,
             sensitive_headers,
+            url_str,
         )
 
         request_info = RequestInfo(method, url, headers, stream, extensions)
@@ -1479,7 +1490,8 @@ class _BaseHTTPXClientInstrumentor(BaseInstrumentor):
             args, kwargs, module
         )
 
-        if excluded_urls and excluded_urls.url_disabled(_normalize_url(url)):
+        url_str = _normalize_url(url)
+        if excluded_urls and excluded_urls.url_disabled(url_str):
             return await wrapped(*args, **kwargs)
 
         method_original = method.decode()
@@ -1497,6 +1509,7 @@ class _BaseHTTPXClientInstrumentor(BaseInstrumentor):
             headers,
             captured_request_headers,
             sensitive_headers,
+            url_str,
         )
 
         request_info = RequestInfo(method, url, headers, stream, extensions)

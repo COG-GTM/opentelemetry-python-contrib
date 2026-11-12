@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-httpx`: avoid re-parsing the request URL and skip header normalization when custom header capture is not configured
