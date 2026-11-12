@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from functools import lru_cache
 from os import environ
 from re import IGNORECASE as RE_IGNORECASE
+from re import Pattern, search
 from re import compile as re_compile
-from re import search
 from typing import Callable, Iterable, overload
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -83,13 +84,18 @@ class ExcludeList:
         return bool(self._excluded_urls and search(self._regex, url))
 
 
+@lru_cache(maxsize=128)
+def _compile_header_regexes(header_regexes: tuple[str, ...]) -> Pattern[str]:
+    return re_compile("|".join(header_regexes), RE_IGNORECASE)
+
+
 class SanitizeValue:
     """Class to sanitize (remove sensitive data from) certain headers (given as a list of regexes)"""
 
     def __init__(self, sanitized_fields: Iterable[str]):
         self._sanitized_fields = sanitized_fields
         if self._sanitized_fields:
-            self._regex = re_compile("|".join(sanitized_fields), RE_IGNORECASE)
+            self._regex = _compile_header_regexes(tuple(sanitized_fields))
 
     def sanitize_header_value(self, header: str, value: str) -> str:
         return (
@@ -107,9 +113,8 @@ class SanitizeValue:
         values: dict[str, list[str]] = {}
 
         if header_regexes:
-            header_regexes_compiled = re_compile(
-                "|".join(header_regexes),
-                RE_IGNORECASE,
+            header_regexes_compiled = _compile_header_regexes(
+                tuple(header_regexes)
             )
 
             for header_name, header_value in headers.items():
@@ -248,6 +253,11 @@ def get_custom_headers(env_var: str) -> list[str]:
     return []
 
 
+@lru_cache(maxsize=128)
+def _get_sanitize_value(sensitive_headers: tuple[str, ...]) -> SanitizeValue:
+    return SanitizeValue(sensitive_headers)
+
+
 def get_custom_header_attributes(
     headers: Mapping[str, str | list[str]] | None,
     captured_headers: list[str] | None,
@@ -271,7 +281,7 @@ def get_custom_header_attributes(
     """
     if not headers or not captured_headers:
         return {}
-    sanitize: SanitizeValue = SanitizeValue(sensitive_headers or ())
+    sanitize = _get_sanitize_value(tuple(sensitive_headers or ()))
     return sanitize.sanitize_header_values(
         headers, captured_headers, normalize_function
     )

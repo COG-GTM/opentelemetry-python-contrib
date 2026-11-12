@@ -1,0 +1,1 @@
+`opentelemetry-util-http`: cache compiled header-capture regexes and the `SanitizeValue` used by `get_custom_header_attributes` instead of rebuilding them on every request
