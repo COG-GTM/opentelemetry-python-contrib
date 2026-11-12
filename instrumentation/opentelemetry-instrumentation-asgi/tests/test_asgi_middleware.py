@@ -32,6 +32,7 @@ from opentelemetry.sdk.metrics.export import (
     HistogramDataPoint,
     NumberDataPoint,
 )
+from opentelemetry.sdk.trace import Span as SdkSpan
 from opentelemetry.semconv._incubating.attributes.http_attributes import (
     HTTP_FLAVOR,
     HTTP_HOST,
@@ -560,6 +561,47 @@ class TestAsgiApplication(AsyncAsgiTestBase):
         await self.send_default_request()
         outputs = await self.get_all_output()
         self.validate_outputs(outputs)
+
+    async def test_request_attributes_set_only_at_span_start(self):
+        """Test that request attributes are not re-set after span start."""
+        app = otel_asgi.OpenTelemetryMiddleware(simple_asgi)
+        self.seed_app(app)
+        with (
+            mock.patch.object(
+                SdkSpan,
+                "set_attribute",
+                autospec=True,
+                wraps=SdkSpan.set_attribute,
+            ) as set_attribute,
+            mock.patch.object(
+                SdkSpan,
+                "set_attributes",
+                autospec=True,
+                wraps=SdkSpan.set_attributes,
+            ) as set_attributes,
+        ):
+            await self.send_default_request()
+            outputs = await self.get_all_output()
+        self.validate_outputs(outputs)
+
+        server_span = next(
+            span
+            for span in self.memory_exporter.get_finished_spans()
+            if span.kind == SpanKind.SERVER
+        )
+        self.assertEqual(server_span.attributes[HTTP_METHOD], "GET")
+        set_keys = [
+            call.args[1]
+            for call in set_attribute.call_args_list
+            if call.args[0].context.span_id == server_span.context.span_id
+        ] + [
+            key
+            for call in set_attributes.call_args_list
+            if call.args[0].context.span_id == server_span.context.span_id
+            for key in call.args[1]
+        ]
+        self.assertNotIn(HTTP_METHOD, set_keys)
+        self.assertNotIn(HTTP_URL, set_keys)
 
     async def test_basic_asgi_call_new_semconv(self):
         """Test that spans are emitted as expected."""

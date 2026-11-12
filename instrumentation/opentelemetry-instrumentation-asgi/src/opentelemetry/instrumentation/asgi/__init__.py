@@ -771,9 +771,6 @@ class OpenTelemetryMiddleware:
         try:
             with trace.use_span(span, end_on_exit=False) as current_span:
                 if current_span.is_recording():
-                    for key, value in attributes.items():
-                        current_span.set_attribute(key, value)
-
                     if current_span.kind == trace.SpanKind.SERVER:
                         custom_attributes = (
                             collect_custom_headers_attributes(
