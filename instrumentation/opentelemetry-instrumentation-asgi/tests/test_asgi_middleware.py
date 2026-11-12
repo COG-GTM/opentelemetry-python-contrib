@@ -801,8 +801,15 @@ class TestAsgiApplication(AsyncAsgiTestBase):
             await self.get_all_output()
 
         decoded = [call.args[0] for call in decode.call_args_list]
-        for header in (b"host", b"user-agent", b"traceparent"):
-            self.assertEqual(decoded.count(header), 1, header)
+        for item in (
+            b"host",
+            b"example.com",
+            b"user-agent",
+            b"test-agent",
+            b"traceparent",
+            f"00-{trace_id}-{parent_span_id}-01".encode(),
+        ):
+            self.assertEqual(decoded.count(item), 1, item)
 
         server_span = next(
             span

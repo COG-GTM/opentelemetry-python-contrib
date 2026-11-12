@@ -107,6 +107,13 @@ class TestRequestHeadersGetter(TestCase):
             self.assertIsNone(getter.get(request_headers, "test"))
             self.assertEqual(getter.keys(request_headers), [])
 
+    def test_unrequested_values_not_decoded(self):
+        request_headers = _RequestHeaders(
+            {"headers": [(b"cookie", b"\xe9\\u"), (b"host", b"example.com")]}
+        )
+        self.assertEqual(request_headers.get("host"), ["example.com"])
+        self.assertEqual(request_headers.names, ["cookie", "host"])
+
     def test_get_returns_new_list(self):
         request_headers = _RequestHeaders({"headers": [(b"key", b"val")]})
         request_headers.get("key").append("mutated")

@@ -323,24 +323,29 @@ asgi_getter = ASGIGetter()
 
 
 class _RequestHeaders:
-    """Request headers of an ASGI scope, decoded once per request."""
+    """Request headers of an ASGI scope; names are decoded once per request
+    and values once per looked-up name."""
 
-    __slots__ = ("names", "_values")
+    __slots__ = ("names", "_raw_values", "_values")
 
     def __init__(self, scope: typing.Mapping[str, Any]) -> None:
         self.names: list[str] = []
+        self._raw_values: dict[str, list[bytes]] = {}
         self._values: dict[str, list[str]] = {}
         for key, value in scope.get("headers") or ():
             name = _decode_header_item(key)
             self.names.append(name)
-            self._values.setdefault(name.lower(), []).append(
-                _decode_header_item(value)
-            )
+            self._raw_values.setdefault(name.lower(), []).append(value)
 
     def get(self, key: str) -> typing.Optional[typing.List[str]]:
-        values = self._values.get(key.lower())
-        if not values:
-            return None
+        key = key.lower()
+        values = self._values.get(key)
+        if values is None:
+            raw_values = self._raw_values.get(key)
+            if not raw_values:
+                return None
+            values = [_decode_header_item(value) for value in raw_values]
+            self._values[key] = values
         return list(values)
 
 
