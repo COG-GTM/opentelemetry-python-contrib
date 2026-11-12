@@ -2,14 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 # pylint: disable=unnecessary-dunder-call
 
+import json
 from unittest import TestCase, mock
 
 from opentelemetry.instrumentation.kafka.utils import (
     KafkaPropertiesExtractor,
     _create_consumer_span,
+    _enrich_span,
     _get_span_name,
+    _json_dumps_cached,
     _kafka_getter,
     _kafka_setter,
+    _serialize_bootstrap_servers,
     _wrap_next,
     _wrap_send,
 )
@@ -238,3 +242,68 @@ class TestUtils(TestCase):
             )
             is None
         )
+
+
+class TestBootstrapServersSerialization(TestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        _json_dumps_cached.cache_clear()
+
+    def test_output_matches_json_dumps(self):
+        for bootstrap_servers in (
+            ["localhost:9092"],
+            ["broker-1:9092", "broker-2:9092"],
+            ("broker-1:9092", "broker-2:9092"),
+            [],
+            "localhost:9092",
+            None,
+            [1, 1.0, True],
+            [["nested:9092"]],
+        ):
+            with self.subTest(bootstrap_servers=bootstrap_servers):
+                self.assertEqual(
+                    _serialize_bootstrap_servers(bootstrap_servers),
+                    json.dumps(bootstrap_servers),
+                )
+
+    def test_repeated_calls_encode_once(self):
+        with mock.patch(
+            "opentelemetry.instrumentation.kafka.utils.json.dumps",
+            wraps=json.dumps,
+        ) as dumps:
+            for _ in range(5):
+                _serialize_bootstrap_servers(
+                    ["broker-1:9092", "broker-2:9092"]
+                )
+                _serialize_bootstrap_servers("localhost:9092")
+        self.assertEqual(dumps.call_count, 2)
+
+    def test_list_mutation_is_reflected(self):
+        bootstrap_servers = ["broker-1:9092"]
+        self.assertEqual(
+            _serialize_bootstrap_servers(bootstrap_servers),
+            '["broker-1:9092"]',
+        )
+        bootstrap_servers.append("broker-2:9092")
+        self.assertEqual(
+            _serialize_bootstrap_servers(bootstrap_servers),
+            '["broker-1:9092", "broker-2:9092"]',
+        )
+
+    def test_enrich_span_sets_messaging_url(self):
+        span = mock.MagicMock()
+        span.is_recording.return_value = True
+        _enrich_span(span, ["broker-1:9092", "broker-2:9092"], "topic", 0)
+        span.set_attribute.assert_any_call(
+            "messaging.url", '["broker-1:9092", "broker-2:9092"]'
+        )
+
+    def test_enrich_span_skips_non_recording_span(self):
+        span = mock.MagicMock()
+        span.is_recording.return_value = False
+        with mock.patch(
+            "opentelemetry.instrumentation.kafka.utils.json.dumps"
+        ) as dumps:
+            _enrich_span(span, ["broker-1:9092"], "topic", 0)
+        dumps.assert_not_called()
+        span.set_attribute.assert_not_called()
