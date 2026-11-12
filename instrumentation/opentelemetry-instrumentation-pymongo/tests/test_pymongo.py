@@ -136,6 +136,59 @@ class TestPymongo(TestBase):
         self.assertFalse(mock_span.set_attribute.called)
         self.assertFalse(mock_span.set_status.called)
 
+    def test_not_recording_skips_statement_and_collection(self):
+        mock_tracer = mock.Mock()
+        mock_span = mock.Mock()
+        mock_span.is_recording.return_value = False
+        mock_tracer.start_span.return_value = mock_span
+        documents = mock.MagicMock()
+        documents.__str__.side_effect = AssertionError(
+            "statement must not be built for non-recording spans"
+        )
+        mock_event = MockEvent(
+            {
+                "command_name": "insert",
+                "insert": "test_collection",
+                "documents": documents,
+            }
+        )
+        command_tracer = CommandTracer(mock_tracer, capture_statement=True)
+        with mock.patch(
+            "opentelemetry.instrumentation.pymongo._get_command_collection_name"
+        ) as mock_get_collection:
+            command_tracer.started(event=mock_event)
+            command_tracer.succeeded(event=mock_event)
+        mock_get_collection.assert_not_called()
+        documents.__str__.assert_not_called()
+        mock_tracer.start_span.assert_called_once_with(
+            "database_name.insert", kind=trace_api.SpanKind.CLIENT
+        )
+        self.assertFalse(mock_span.set_attributes.called)
+        self.assertFalse(mock_span.set_status.called)
+        mock_span.end.assert_called_once()
+
+    def test_capture_statement_insert_documents(self):
+        documents = [{"name": "a"}, {"name": "b"}]
+        mock_event = MockEvent(
+            {
+                "command_name": "insert",
+                "insert": "test_collection",
+                "documents": documents,
+            }
+        )
+        command_tracer = CommandTracer(self.tracer, capture_statement=True)
+        command_tracer.started(event=mock_event)
+        command_tracer.succeeded(event=mock_event)
+        spans_list = self.memory_exporter.get_finished_spans()
+        self.assertEqual(len(spans_list), 1)
+        span = spans_list[0]
+        self.assertEqual(
+            span.attributes[DB_STATEMENT], "insert " + str(documents)
+        )
+        self.assertEqual(
+            span.attributes[DB_MONGODB_COLLECTION], "test_collection"
+        )
+
     def test_suppression_key(self):
         mock_tracer = mock.Mock()
         mock_span = mock.Mock()

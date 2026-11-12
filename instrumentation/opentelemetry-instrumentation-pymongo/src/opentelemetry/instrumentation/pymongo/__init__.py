@@ -140,12 +140,14 @@ class CommandTracer(monitoring.CommandListener):
             return
         command_name = event.command_name
         span_name = f"{event.database_name}.{command_name}"
-        statement = self._get_statement_by_command_name(command_name, event)
-        collection = _get_command_collection_name(event)
 
         try:
             span = self._tracer.start_span(span_name, kind=SpanKind.CLIENT)
             if span.is_recording():
+                statement = self._get_statement_by_command_name(
+                    command_name, event
+                )
+                collection = _get_command_collection_name(event)
                 span_attributes: dict = {}
                 _set_db_system(
                     span_attributes,
