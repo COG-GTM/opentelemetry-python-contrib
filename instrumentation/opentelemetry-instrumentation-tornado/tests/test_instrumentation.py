@@ -3,6 +3,7 @@
 
 
 import asyncio
+from typing import Dict
 from unittest.mock import Mock, patch
 
 import tornado.websocket
@@ -50,7 +51,7 @@ from .tornado_test_app import (
     make_app,
 )
 
-_CAPTURE_HEADERS_ENV = {
+_CAPTURE_HEADERS_ENV: Dict[str, str] = {
     OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST: "Custom-Test-Header-1,Custom-Test-Header-2,Custom-Test-Header-3",
     OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE: "content-type,content-length,my-custom-header,invalid-header",
 }
@@ -58,7 +59,7 @@ _CAPTURE_HEADERS_ENV = {
 
 class TornadoTest(AsyncHTTPTestCase, TestBase):
     # Environment applied before instrument() runs.
-    instrument_env = {}
+    instrument_env: Dict[str, str] = {}
 
     # pylint:disable=no-self-use
     def get_app(self):
@@ -856,7 +857,7 @@ class TestTornadoWrappedWithOtherFramework(TornadoTest):
 
 
 class TestTornadoCustomRequestResponseHeadersAddedWithServerSpan(TornadoTest):
-    instrument_env = _CAPTURE_HEADERS_ENV
+    instrument_env: Dict[str, str] = _CAPTURE_HEADERS_ENV
 
     def test_custom_request_headers_added_in_server_span(self):
         headers = {
@@ -925,7 +926,7 @@ class TestTornadoCustomRequestResponseHeadersAddedWithServerSpan(TornadoTest):
 class TestTornadoCustomRequestResponseHeadersNotAddedWithInternalSpan(
     TornadoTest
 ):
-    instrument_env = _CAPTURE_HEADERS_ENV
+    instrument_env: Dict[str, str] = _CAPTURE_HEADERS_ENV
 
     def get_app(self):
         tracer = trace.get_tracer(__name__)
