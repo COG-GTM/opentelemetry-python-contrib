@@ -92,14 +92,15 @@ class WorkflowInvocation(GenAIInvocation):
         }
 
     def _apply_finish(self, error: Error | None = None) -> None:
-        attributes: dict[str, Any] = {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name
-        }
-        attributes.update(self._get_messages_for_span())
         if error is not None:
             self._apply_error_attributes(error)
-        attributes.update(self.attributes)
-        self.span.set_attributes(attributes)
+        if self.span.is_recording():
+            attributes: dict[str, Any] = {
+                GenAI.GEN_AI_OPERATION_NAME: self._operation_name
+            }
+            attributes.update(self._get_messages_for_span())
+            attributes.update(self.attributes)
+            self.span.set_attributes(attributes)
         self._call_completion_hook(
             inputs=self.input_messages,
             outputs=self.output_messages,

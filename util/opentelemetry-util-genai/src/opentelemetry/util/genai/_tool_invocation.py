@@ -89,17 +89,18 @@ class ToolInvocation(GenAIInvocation):
     def _apply_finish(self, error: Error | None = None) -> None:
         if error is not None:
             self._apply_error_attributes(error)
-        optional_attrs = (
-            (GenAI.GEN_AI_TOOL_NAME, self.name),
-            (GenAI.GEN_AI_TOOL_CALL_ID, self.tool_call_id),
-            (GenAI.GEN_AI_TOOL_TYPE, self.tool_type),
-            (GenAI.GEN_AI_TOOL_DESCRIPTION, self.tool_description),
-            (GenAI.GEN_AI_TOOL_CALL_ARGUMENTS, self.arguments),
-        )
-        attributes: dict[str, Any] = {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            **{k: v for k, v in optional_attrs if v is not None},
-        }
-        attributes.update(self.attributes)
-        self.span.set_attributes(attributes)
+        if self.span.is_recording():
+            optional_attrs = (
+                (GenAI.GEN_AI_TOOL_NAME, self.name),
+                (GenAI.GEN_AI_TOOL_CALL_ID, self.tool_call_id),
+                (GenAI.GEN_AI_TOOL_TYPE, self.tool_type),
+                (GenAI.GEN_AI_TOOL_DESCRIPTION, self.tool_description),
+                (GenAI.GEN_AI_TOOL_CALL_ARGUMENTS, self.arguments),
+            )
+            attributes: dict[str, Any] = {
+                GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
+                **{k: v for k, v in optional_attrs if v is not None},
+            }
+            attributes.update(self.attributes)
+            self.span.set_attributes(attributes)
         self._metrics_recorder.record(self)

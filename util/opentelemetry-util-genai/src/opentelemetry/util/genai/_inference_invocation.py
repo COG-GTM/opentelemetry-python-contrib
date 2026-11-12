@@ -186,10 +186,11 @@ class InferenceInvocation(GenAIInvocation):
     def _apply_finish(self, error: Error | None = None) -> None:
         if error is not None:
             self._apply_error_attributes(error)
-        attributes = self._get_attributes()
-        attributes.update(self._get_message_attributes(for_span=True))
-        attributes.update(self.attributes)
-        self.span.set_attributes(attributes)
+        if self.span.is_recording():
+            attributes = self._get_attributes()
+            attributes.update(self._get_message_attributes(for_span=True))
+            attributes.update(self.attributes)
+            self.span.set_attributes(attributes)
         self._metrics_recorder.record(self)
         log_record = self._maybe_create_event()
         self._call_completion_hook(
