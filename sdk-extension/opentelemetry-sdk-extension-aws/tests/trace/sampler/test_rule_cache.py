@@ -6,6 +6,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import datetime
+import threading
 from threading import Lock
 from unittest import TestCase
 
@@ -115,8 +116,15 @@ class TestRuleCache(TestCase):
         cache = _RuleCache(
             None, Resource.get_empty(), CLIENT_ID, _Clock(), lock
         )
+        results: list[bool] = []
         with lock:
-            self.assertFalse(cache.expired())
+            checker = threading.Thread(
+                target=lambda: results.append(cache.expired()), daemon=True
+            )
+            checker.start()
+            checker.join(timeout=5)
+        self.assertFalse(checker.is_alive(), "expired() blocked on lock")
+        self.assertEqual(results, [False])
 
     def test_update_cache_with_only_one_rule_changed(self):
         cache = _RuleCache(
