@@ -10,6 +10,7 @@ from sqlalchemy import (
     create_engine,
     text,
 )
+from sqlalchemy.engine.url import make_url
 
 from opentelemetry import trace
 from opentelemetry.instrumentation._semconv import (
@@ -32,9 +33,11 @@ from opentelemetry.semconv._incubating.attributes.db_attributes import (
     DB_OPERATION,
     DB_STATEMENT,
     DB_SYSTEM,
+    DB_USER,
 )
 from opentelemetry.semconv._incubating.attributes.net_attributes import (
     NET_PEER_NAME,
+    NET_PEER_PORT,
 )
 from opentelemetry.semconv.attributes.db_attributes import (
     DB_NAMESPACE,
@@ -1067,6 +1070,40 @@ class TestSqlalchemyInstrumentation(TestBase):
         for span in query_spans:
             self.assertEqual(span.attributes[DB_NAME], ":memory:")
             self.assertEqual(span.attributes[DB_SYSTEM], "sqlite")
+
+    def test_url_attributes_cache_with_host(self):
+        engine_tracer = SQLAlchemyInstrumentor().instrument(
+            engine=create_engine("sqlite:///:memory:"),
+            tracer_provider=self.tracer_provider,
+        )
+        url = make_url("postgresql://user@db.example.com:5432/orders")
+        with mock.patch(
+            "opentelemetry.instrumentation.sqlalchemy.engine._get_attributes_from_url",
+            side_effect=_get_attributes_from_url,
+        ) as get_attributes_from_url:
+            first = engine_tracer._get_attributes_from_url(url)
+            second = engine_tracer._get_attributes_from_url(url)
+            get_attributes_from_url.assert_called_once()
+
+            other = engine_tracer._get_attributes_from_url(
+                make_url("postgresql://user@replica.example.com:6432/orders")
+            )
+            self.assertEqual(get_attributes_from_url.call_count, 2)
+
+        self.assertTrue(first[1])
+        self.assertIs(first[0], second[0])
+        self.assertEqual(
+            first[0],
+            {
+                NET_PEER_NAME: "db.example.com",
+                NET_PEER_PORT: 5432,
+                DB_NAME: "orders",
+                DB_USER: "user",
+            },
+        )
+        self.assertTrue(other[1])
+        self.assertEqual(other[0][NET_PEER_NAME], "replica.example.com")
+        self.assertEqual(other[0][NET_PEER_PORT], 6432)
 
     def test_get_db_name_from_cursor_or_conn_postgresql_success(self):
         mock_cursor = mock.Mock()

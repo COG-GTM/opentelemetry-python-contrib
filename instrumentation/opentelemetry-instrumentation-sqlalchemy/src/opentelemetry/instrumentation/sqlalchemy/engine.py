@@ -3,8 +3,10 @@
 import os
 import re
 import weakref
+from typing import Any
 
 import sqlalchemy
+from sqlalchemy.engine.url import URL
 from sqlalchemy.event import (  # pylint: disable=no-name-in-module
     listen,
     remove,
@@ -359,7 +361,9 @@ class EngineTracer:
         }
         return commenter_data
 
-    def _get_attributes_from_url(self, url):
+    def _get_attributes_from_url(
+        self, url: URL
+    ) -> tuple[dict[str, Any], bool]:
         """Returns ``_get_attributes_from_url`` for ``url``, cached per URL object."""
         cache = self._url_attrs_cache
         if cache is not None and cache[0] is url:
