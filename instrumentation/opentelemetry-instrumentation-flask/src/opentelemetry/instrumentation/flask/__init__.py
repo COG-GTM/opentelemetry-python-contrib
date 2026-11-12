@@ -296,6 +296,8 @@ _ENVIRON_SPAN_KEY = "opentelemetry-flask.span_key"
 _ENVIRON_ACTIVATION_KEY = "opentelemetry-flask.activation_key"
 _ENVIRON_REQCTX_REF_KEY = "opentelemetry-flask.reqctx_ref_key"
 _ENVIRON_TOKEN = "opentelemetry-flask.token"
+_ENVIRON_REQ_ATTRS_KEY = "opentelemetry-flask.req_attrs_key"
+_ENVIRON_URL_EXCLUDED_KEY = "opentelemetry-flask.url_excluded_key"
 
 _excluded_urls_from_env = get_excluded_urls("FLASK")
 
@@ -330,6 +332,20 @@ def get_default_span_name():
     return span_name
 
 
+def _is_url_excluded(excluded_urls) -> bool:
+    """Returns whether the current request URL is excluded, evaluating the
+    exclusion regex at most once per request and ``excluded_urls`` object."""
+    if not excluded_urls:
+        return False
+    environ = flask.request.environ
+    cached = environ.get(_ENVIRON_URL_EXCLUDED_KEY)
+    if cached is not None and cached[0] is excluded_urls:
+        return cached[1]
+    excluded = bool(excluded_urls.url_disabled(flask.request.url))
+    environ[_ENVIRON_URL_EXCLUDED_KEY] = (excluded_urls, excluded)
+    return excluded
+
+
 def _rewrapped_app(
     wsgi_app,
     active_requests_counter,
@@ -339,6 +355,13 @@ def _rewrapped_app(
     sem_conv_opt_in_mode=_StabilityMode.DEFAULT,
     duration_histogram_new=None,
 ):
+    # Request attributes can only be reused by ``_before_request`` when no
+    # other WSGI middleware sits between this wrapper and Flask, since such
+    # middleware (e.g. ProxyFix) may rewrite the environ in between.
+    reuse_request_attributes = isinstance(
+        getattr(wsgi_app, "__self__", None), flask.Flask
+    )
+
     # pylint: disable=too-many-statements
     def _wrapped_app(wrapped_app_environ, start_response):
         # We want to measure the time for route matching, etc.
@@ -350,6 +373,13 @@ def _rewrapped_app(
         attributes = otel_wsgi.collect_request_attributes(
             wrapped_app_environ, sem_conv_opt_in_mode
         )
+        if reuse_request_attributes:
+            wrapped_app_environ[_ENVIRON_REQ_ATTRS_KEY] = (
+                sem_conv_opt_in_mode,
+                attributes,
+            )
+        else:
+            wrapped_app_environ.pop(_ENVIRON_REQ_ATTRS_KEY, None)
         active_requests_count_attrs = (
             otel_wsgi._parse_active_request_count_attrs(
                 attributes,
@@ -451,13 +481,7 @@ def _rewrapped_app(
             active_requests_counter.add(-1, active_requests_count_attrs)
 
     def _should_trace(excluded_urls) -> bool:
-        return bool(
-            flask.request
-            and (
-                excluded_urls is None
-                or not excluded_urls.url_disabled(flask.request.url)
-            )
-        )
+        return bool(flask.request and not _is_url_excluded(excluded_urls))
 
     return _wrapped_app
 
@@ -471,15 +495,22 @@ def _wrapped_before_request(
     sem_conv_opt_in_mode=_StabilityMode.DEFAULT,
 ):
     def _before_request():
-        if excluded_urls and excluded_urls.url_disabled(flask.request.url):
+        if _is_url_excluded(excluded_urls):
             return
         flask_request_environ = flask.request.environ
         span_name = get_default_span_name()
 
-        attributes = otel_wsgi.collect_request_attributes(
-            flask_request_environ,
-            sem_conv_opt_in_mode=sem_conv_opt_in_mode,
-        )
+        cached_attributes = flask_request_environ.get(_ENVIRON_REQ_ATTRS_KEY)
+        if (
+            cached_attributes is not None
+            and cached_attributes[0] == sem_conv_opt_in_mode
+        ):
+            attributes = cached_attributes[1].copy()
+        else:
+            attributes = otel_wsgi.collect_request_attributes(
+                flask_request_environ,
+                sem_conv_opt_in_mode=sem_conv_opt_in_mode,
+            )
         if flask.request.url_rule:
             # For 404 that result from no route found, etc, we
             # don't have a url_rule.
@@ -547,7 +578,7 @@ def _wrapped_teardown_request(
 ):
     def _teardown_request(exc):
         # pylint: disable=unnecessary-dunder-call
-        if excluded_urls and excluded_urls.url_disabled(flask.request.url):
+        if _is_url_excluded(excluded_urls):
             return
 
         activation = flask.request.environ.get(_ENVIRON_ACTIVATION_KEY)

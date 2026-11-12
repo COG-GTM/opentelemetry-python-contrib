@@ -23,7 +23,10 @@ from opentelemetry.instrumentation.propagators import (
     get_global_response_propagator,
     set_global_response_propagator,
 )
-from opentelemetry.instrumentation.wsgi import OpenTelemetryMiddleware
+from opentelemetry.instrumentation.wsgi import (
+    OpenTelemetryMiddleware,
+    collect_request_attributes,
+)
 from opentelemetry.sdk.metrics.export import (
     HistogramDataPoint,
     NumberDataPoint,
@@ -63,6 +66,7 @@ from opentelemetry.util.http import (
     OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST,
     OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE,
     OTEL_PYTHON_INSTRUMENTATION_HTTP_CAPTURE_ALL_METHODS,
+    ExcludeList,
     get_excluded_urls,
 )
 
@@ -481,6 +485,75 @@ class TestProgrammatic(InstrumentationTest, WsgiTestBase):
         client.get("/explicit_excluded_noarg2")
         span_list = self.memory_exporter.get_finished_spans()
         self.assertEqual(len(span_list), 1)
+
+    def test_request_attributes_collected_once_per_request(self):
+        with patch(
+            "opentelemetry.instrumentation.flask.otel_wsgi.collect_request_attributes",
+            side_effect=collect_request_attributes,
+        ) as collect_mock:
+            self.client.get("/hello/123")
+
+        self.assertEqual(collect_mock.call_count, 1)
+        span_list = self.memory_exporter.get_finished_spans()
+        self.assertEqual(len(span_list), 1)
+        self.assertEqual(
+            span_list[0].attributes,
+            expected_attributes(
+                {
+                    HTTP_TARGET: "/hello/123",
+                    HTTP_ROUTE: "/hello/<int:helloid>",
+                }
+            ),
+        )
+
+    def test_excluded_urls_evaluated_once_per_request(self):
+        for url, expected_spans in (
+            ("/env_excluded_arg/123", 0),
+            ("/hello/123", 1),
+        ):
+            with self.subTest(url=url):
+                self.memory_exporter.clear()
+                with patch.object(
+                    ExcludeList,
+                    "url_disabled",
+                    autospec=True,
+                    side_effect=ExcludeList.url_disabled,
+                ) as url_disabled_mock:
+                    resp = self.client.get(url)
+                    resp.close()
+
+                self.assertEqual(url_disabled_mock.call_count, 1)
+                self.assertEqual(
+                    len(self.memory_exporter.get_finished_spans()),
+                    expected_spans,
+                )
+
+    def test_request_attributes_recollected_after_inner_middleware(self):
+        def rewrite_host(wsgi_app):
+            def middleware(environ, start_response):
+                environ["HTTP_HOST"] = "rewritten.example"
+                return wsgi_app(environ, start_response)
+
+            return middleware
+
+        app = Flask(__name__)
+        app.route("/hello/<int:helloid>")(self._hello_endpoint)
+        app.wsgi_app = rewrite_host(app.wsgi_app)
+        FlaskInstrumentor().instrument_app(app)
+        try:
+            app.test_client().get("/hello/123")
+        finally:
+            with self.disable_logging():
+                FlaskInstrumentor().uninstrument_app(app)
+
+        span_list = self.memory_exporter.get_finished_spans()
+        self.assertEqual(len(span_list), 1)
+        self.assertEqual(
+            span_list[0].attributes[HTTP_HOST], "rewritten.example"
+        )
+        self.assertEqual(
+            span_list[0].attributes[NET_HOST_NAME], "rewritten.example"
+        )
 
     def test_flask_metrics(self):
         start = default_timer()
