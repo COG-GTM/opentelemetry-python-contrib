@@ -150,7 +150,7 @@ from functools import partial
 from logging import getLogger
 from time import time_ns
 from timeit import default_timer
-from typing import Collection, Dict, List, Tuple
+from typing import Callable, Collection, Dict, List, Mapping, Tuple
 
 import tornado.web
 import tornado.websocket
@@ -655,14 +655,18 @@ def _log_exception(
     return func(*args, **kwargs)
 
 
-def _resolve_captured_headers(env_var, normalise):
+def _resolve_captured_headers(
+    env_var: str, normalise: Callable[[str], str]
+) -> List[Tuple[str, str]]:
     return [
         (header_name, normalise(header_name.lower()))
         for header_name in get_custom_headers(env_var)
     ]
 
 
-def _collect_custom_headers_attributes(headers, captured_headers):
+def _collect_custom_headers_attributes(
+    headers: Mapping[str, str], captured_headers: List[Tuple[str, str]]
+) -> Dict[str, List[str]]:
     attributes = {}
     for header_name, key in captured_headers:
         header_values = headers.get(header_name)
