@@ -86,7 +86,10 @@ def _format_command_args(args: list[str]):
     # Sanitized query format: "COMMAND ? ?"
     args_length = len(args)
     if args_length > 0:
-        out = [str(args[0])] + ["?"] * (args_length - 1)
+        # Each placeholder adds 2 characters, so anything beyond this count
+        # would be truncated away anyway.
+        placeholders = min(args_length - 1, cmd_max_len // 2 + 1)
+        out = [str(args[0])] + ["?"] * placeholders
         out_str = " ".join(out)
 
         if len(out_str) > cmd_max_len:

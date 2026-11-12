@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-redis`: skip formatting `db.statement` for non-recording spans and cap the number of placeholders built for large commands before truncation
