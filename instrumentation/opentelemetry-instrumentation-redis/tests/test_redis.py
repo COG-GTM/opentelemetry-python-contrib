@@ -5,6 +5,7 @@
 
 import asyncio
 import os
+import sys
 from unittest import IsolatedAsyncioTestCase, mock
 from unittest.mock import AsyncMock, patch
 
@@ -364,10 +365,20 @@ class TestRedis(TestBase):
                     self.assertLessEqual(len(formatted), 1000)
 
         self.assertEqual(_format_command_args([]), "")
-        large = _format_command_args(["MSET"] + ["v"] * 100000)
-        self.assertEqual(len(large), 1000)
-        self.assertTrue(large.startswith("MSET ? ?"))
-        self.assertTrue(large.endswith("..."))
+
+    def test_format_command_args_caps_placeholders(self):
+        class HugeArgs:
+            def __len__(self):
+                return sys.maxsize
+
+            def __getitem__(self, index):
+                return "MSET"
+
+        # One placeholder per argument would raise MemoryError here.
+        formatted = _format_command_args(HugeArgs())
+        self.assertEqual(len(formatted), 1000)
+        self.assertTrue(formatted.startswith("MSET ? ?"))
+        self.assertTrue(formatted.endswith("..."))
 
     def test_attributes_default(self):
         redis_client = redis.Redis()
