@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-flask`: collect WSGI request attributes and evaluate the excluded-URL regex once per request instead of repeating them in `before_request`, `start_response` and `teardown_request`
