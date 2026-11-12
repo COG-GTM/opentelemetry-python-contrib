@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-google-genai`: Skip building and serializing completion details (input/output messages, system instructions, tool definitions) when content is not captured or the span is not recording
