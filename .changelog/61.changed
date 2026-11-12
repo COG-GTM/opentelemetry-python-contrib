@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-aiohttp-client`: skip building request/response header dicts when header capture is not configured, and build the header sanitizer once per trace config
