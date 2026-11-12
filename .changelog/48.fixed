@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-asgi`: stop setting request attributes on the server span a second time after `start_span` already applied them
