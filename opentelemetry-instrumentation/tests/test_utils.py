@@ -15,13 +15,17 @@ try:
 except ImportError:
     from wrapt import ObjectProxy as BaseObjectProxy
 
+from opentelemetry import context
 from opentelemetry.context import (
     _SUPPRESS_HTTP_INSTRUMENTATION_KEY,
     _SUPPRESS_INSTRUMENTATION_KEY,
     get_current,
     get_value,
 )
-from opentelemetry.instrumentation.sqlcommenter_utils import _add_sql_comment
+from opentelemetry.instrumentation.sqlcommenter_utils import (
+    _add_sql_comment,
+    _cached_str_comment_fragment,
+)
 from opentelemetry.instrumentation.utils import (
     _python_path_without_directory,
     http_status_to_status_code,
@@ -216,6 +220,64 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(
             commented_sql_without_semicolon,
             "Select 1 /*comment%%202='value%%203',comment_1='value%%201'*/",
+        )
+
+    def test_add_sql_comment_mixed_value_types(self):
+        meta = {
+            "db_driver": "psycopg2:2.9.3",
+            "dbapi_level": "2.0",
+            "dbapi_threadsafety": 2,
+            "driver_paramstyle": "pyformat",
+            "libpq_version": 140001,
+            "bytes_value": b"a b",
+            "skipped": None,
+            "traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+        }
+        expected = (
+            "Select 1 /*bytes_value='a%%20b',db_driver='psycopg2%%3A2.9.3',"
+            "dbapi_level='2.0',dbapi_threadsafety=2,"
+            "driver_paramstyle='pyformat',libpq_version=140001,"
+            "traceparent='00-0123456789abcdef0123456789abcdef-0123456789abcdef-01'*/"
+        )
+
+        self.assertEqual(_add_sql_comment("Select 1", **meta), expected)
+        # Second call is served from the fragment cache and must match.
+        self.assertEqual(_add_sql_comment("Select 1", **meta), expected)
+
+    def test_add_sql_comment_reuses_quoted_fragments(self):
+        _cached_str_comment_fragment.cache_clear()
+        meta = {"db_driver": "psycopg2:2.9.3", "dbapi_level": "2.0"}
+
+        _add_sql_comment("Select 1", **meta)
+        _add_sql_comment("Select 2", **meta)
+
+        info = _cached_str_comment_fragment.cache_info()
+        self.assertEqual(info.misses, 2)
+        self.assertEqual(info.hits, 2)
+
+    def test_add_sql_comment_with_framework_tags(self):
+        token = context.attach(
+            context.set_value(
+                "SQLCOMMENTER_ORM_TAGS_AND_VALUES",
+                {"framework": "flask:2.3", "route": "/a b"},
+            )
+        )
+        try:
+            with mock.patch(
+                "opentelemetry.instrumentation.sqlcommenter_utils.context.get_value",
+                wraps=context.get_value,
+            ) as get_value_mock:
+                commented_sql = _add_sql_comment("Select 1", db_driver="x")
+        finally:
+            context.detach(token)
+
+        self.assertEqual(
+            commented_sql,
+            "Select 1 /*db_driver='x',framework='flask%%3A2.3',"
+            "route='/a%%20b'*/",
+        )
+        get_value_mock.assert_called_once_with(
+            "SQLCOMMENTER_ORM_TAGS_AND_VALUES"
         )
 
     def test_add_sql_comments_without_comments(self):
