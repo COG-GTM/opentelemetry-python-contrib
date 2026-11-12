@@ -3,8 +3,10 @@
 import os
 import re
 import weakref
+from typing import Any
 
 import sqlalchemy
+from sqlalchemy.engine.url import URL
 from sqlalchemy.event import (  # pylint: disable=no-name-in-module
     listen,
     remove,
@@ -231,6 +233,7 @@ class EngineTracer:
         self.enable_attribute_commenter = enable_attribute_commenter
         self._engine_attrs = _get_attributes_from_engine(engine)
         self._leading_comment_remover = re.compile(r"^/\*.*?\*/")
+        self._url_attrs_cache = None
 
         self._register_event_listener(
             engine, "before_cursor_execute", self._before_cur_exec, retval=True
@@ -329,7 +332,9 @@ class EngineTracer:
             # dialect is too weird but in any case it shouldn't break anything.
             # Strip leading comments so we get the operation name.
             parts.append(
-                self._leading_comment_remover.sub("", statement).split()[0]
+                self._leading_comment_remover.sub("", statement).split(
+                    maxsplit=1
+                )[0]
             )
         if db_name:
             parts.append(db_name)
@@ -356,16 +361,33 @@ class EngineTracer:
         }
         return commenter_data
 
+    def _get_attributes_from_url(
+        self, url: URL
+    ) -> tuple[dict[str, Any], bool]:
+        """Returns ``_get_attributes_from_url`` for ``url``, cached per URL object."""
+        cache = self._url_attrs_cache
+        if cache is not None and cache[0] is url:
+            attrs, found = cache[1], cache[2]
+        else:
+            attrs, found = _get_attributes_from_url(
+                url,
+                self._sem_conv_opt_in_mode_db,
+                self._sem_conv_opt_in_mode_http,
+            )
+            self._url_attrs_cache = (url, attrs, found)
+        # Callers may add to attrs when the URL has no host, so hand out a copy.
+        return (attrs, found) if found else (dict(attrs), found)
+
     def _set_db_client_span_attributes(
-        self, span, statement, db_name, attrs
+        self, span, statement, operation_name, attrs
     ) -> None:
-        """Uses statement, db_name, and attrs to set attributes of provided Otel span"""
+        """Uses statement, operation_name, and attrs to set attributes of provided Otel span"""
         span_attrs = dict(attrs)
         _set_db_statement(span_attrs, statement, self._sem_conv_opt_in_mode_db)
         _set_db_system(span_attrs, self.vendor, self._sem_conv_opt_in_mode_db)
         _set_db_operation(
             span_attrs,
-            self._operation_name(db_name, statement),
+            operation_name,
             self._sem_conv_opt_in_mode_db,
         )
         for key, value in span_attrs.items():
@@ -377,11 +399,7 @@ class EngineTracer:
         if not is_instrumentation_enabled():
             return statement, params
 
-        attrs, found = _get_attributes_from_url(
-            conn.engine.url,
-            self._sem_conv_opt_in_mode_db,
-            self._sem_conv_opt_in_mode_http,
-        )
+        attrs, found = self._get_attributes_from_url(conn.engine.url)
         if not found:
             attrs = _get_attributes_from_cursor_or_conn(
                 self.vendor,
@@ -395,8 +413,9 @@ class EngineTracer:
         # Extract db_name for operation name
         db_name = _get_db_name_from_cursor_or_conn(self.vendor, conn, cursor)
 
+        operation_name = self._operation_name(db_name, statement)
         span = self.tracer.start_span(
-            self._operation_name(db_name, statement),
+            operation_name,
             kind=trace.SpanKind.CLIENT,
         )
         with trace.use_span(span, end_on_exit=False):
@@ -413,14 +432,14 @@ class EngineTracer:
                             statement, **commenter_data
                         )
                         self._set_db_client_span_attributes(
-                            span, statement, db_name, attrs
+                            span, statement, operation_name, attrs
                         )
 
                     else:
                         # sqlcomment is only added to executed query
                         # so db.statement and/or db.query.text is set before add_sql_comment
                         self._set_db_client_span_attributes(
-                            span, statement, db_name, attrs
+                            span, statement, operation_name, attrs
                         )
                         statement = _add_sql_comment(
                             statement, **commenter_data
@@ -429,7 +448,7 @@ class EngineTracer:
                 else:
                     # no sqlcomment anywhere
                     self._set_db_client_span_attributes(
-                        span, statement, db_name, attrs
+                        span, statement, operation_name, attrs
                     )
 
         context._otel_span = span
