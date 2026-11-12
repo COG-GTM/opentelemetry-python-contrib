@@ -10,6 +10,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 
+import opentelemetry.instrumentation.httpx as httpx_instrumentation
 from opentelemetry import trace
 from opentelemetry.instrumentation._semconv import (
     OTEL_SEMCONV_STABILITY_OPT_IN,
@@ -233,6 +234,49 @@ class TestHTTPX2Instrumentor(TestBase):
 
         self.assertEqual(response.text, "Hello!")
         self._assert_basic_span(url)
+
+    def test_transport_skips_url_reparse_and_header_normalization(self):
+        url = "http://mock/status/200"
+        sync_transport = SyncOpenTelemetryTransportHttpx2(
+            self._mock_transport(),
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        async_transport = AsyncOpenTelemetryTransportHttpx2(
+            self._mock_transport(),
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        sync_request = httpx2.Request(
+            "GET", url, headers={"X-Custom-Request": "value"}
+        )
+        async_request = httpx2.Request(
+            "GET", url, headers={"X-Custom-Request": "value"}
+        )
+
+        with (
+            mock.patch.object(
+                httpx2.URL,
+                "__init__",
+                autospec=True,
+                side_effect=httpx2.URL.__init__,
+            ) as url_init_mock,
+            mock.patch.object(
+                httpx_instrumentation, "_normalize_headers"
+            ) as normalize_mock,
+        ):
+            sync_transport.handle_request(sync_request)
+            asyncio.run(async_transport.handle_async_request(async_request))
+
+        url_init_mock.assert_not_called()
+        normalize_mock.assert_not_called()
+        spans = self.memory_exporter.get_finished_spans()
+        self.assertEqual(len(spans), 2)
+        for span in spans:
+            self.assertEqual(span.attributes[HTTP_URL], url)
+            self.assertIsNone(
+                span.attributes.get("http.request.header.x_custom_request")
+            )
 
     def test_hooks(self):
         url = "http://mock/status/200"
