@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict
 from unittest import mock
 
 from opentelemetry import propagate
+from opentelemetry import trace as trace_api
 from opentelemetry.baggage.propagation import W3CBaggagePropagator
 from opentelemetry.environment_variables import OTEL_PROPAGATORS
 from opentelemetry.instrumentation.aws_lambda import (
@@ -53,6 +54,7 @@ from opentelemetry.semconv._incubating.attributes.messaging_attributes import (
 from opentelemetry.semconv._incubating.attributes.net_attributes import (
     NET_HOST_NAME,
 )
+from opentelemetry.test.globals_test import reset_trace_globals
 from opentelemetry.test.test_base import TestBase
 from opentelemetry.trace import (
     NoOpTracerProvider,
@@ -678,6 +680,20 @@ class TestAwsLambdaInstrumentor(TestAwsLambdaInstrumentorBase):
                 span.instrumentation_scope.schema_url,
                 "https://opentelemetry.io/schemas/1.11.0",
             )
+
+    def test_tracer_provider_set_after_instrument(self):
+        reset_trace_globals()
+        AwsLambdaInstrumentor().instrument()
+        trace_api.set_tracer_provider(self.tracer_provider)
+
+        mock_execute_lambda(MOCK_LAMBDA_API_GATEWAY_HTTP_API_EVENT)
+
+        spans = self.memory_exporter.get_finished_spans()
+        self.assertEqual(len(spans), 1)
+        self.assertEqual(
+            spans[0].instrumentation_scope.name,
+            "opentelemetry.instrumentation.aws_lambda",
+        )
 
     def test_no_op_tracer_provider(self):
         tracer_provider = NoOpTracerProvider()
