@@ -720,6 +720,8 @@ class _GenerateContentInstrumentationHelper:
         completion_details_attributes: dict[str, AttributeValue],
         tool_definitions: Optional[list[ToolDefinition]] = None,
     ):
+        if not span.is_recording():
+            return
         if self._content_recording_enabled in [
             ContentCapturingMode.SPAN_ONLY,
             ContentCapturingMode.SPAN_AND_EVENT,
@@ -794,12 +796,27 @@ class _GenerateContentInstrumentationHelper:
             span=span,
             log_record=event,
         )
-        completion_details_attributes = _create_completion_details_attributes(
-            input_messages,
-            output_messages,
-            system_instructions,
-            tool_definitions,
+        capture_in_event = self._content_recording_enabled in [
+            ContentCapturingMode.EVENT_ONLY,
+            ContentCapturingMode.SPAN_AND_EVENT,
+        ]
+        capture_in_span = span.is_recording() and (
+            self._content_recording_enabled
+            in [
+                ContentCapturingMode.SPAN_ONLY,
+                ContentCapturingMode.SPAN_AND_EVENT,
+            ]
         )
+        completion_details_attributes: dict[str, AttributeValue] = {}
+        if capture_in_event or capture_in_span:
+            completion_details_attributes = (
+                _create_completion_details_attributes(
+                    input_messages,
+                    output_messages,
+                    system_instructions,
+                    tool_definitions,
+                )
+            )
         self._maybe_log_completion_details_in_log(
             event=event,
             completion_details_attributes=completion_details_attributes,

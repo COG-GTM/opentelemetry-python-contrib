@@ -25,6 +25,10 @@ from opentelemetry.instrumentation._semconv import (
 from opentelemetry.instrumentation.google_genai import (
     GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY,
 )
+from opentelemetry.instrumentation.google_genai.generate_content import (
+    _create_completion_details_attributes,
+)
+from opentelemetry.sdk.trace import Span as SdkSpan
 from opentelemetry.semconv._incubating.attributes import gen_ai_attributes
 from opentelemetry.util.genai.types import ContentCapturingMode
 
@@ -884,6 +888,87 @@ class NonStreamingTestCase(TestCase):
                             )
 
                 self.tearDown()
+
+    def test_new_semconv_completion_details_built_only_when_captured(self):
+        for mode in ContentCapturingMode:
+            for recording in (True, False):
+                with self.subTest(f"mode: {mode}, recording: {recording}"):
+                    self.setUp()
+                    try:
+                        self._assert_completion_details_built_only_when_captured(
+                            mode, recording
+                        )
+                    finally:
+                        self.tearDown()
+
+    def _assert_completion_details_built_only_when_captured(
+        self, mode: ContentCapturingMode, recording: bool
+    ):
+        patched_environ = patch.dict(
+            "os.environ",
+            {
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": mode.name,
+                "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental",
+            },
+        )
+        patched_otel_mapping = patch.dict(
+            _OpenTelemetrySemanticConventionStability._OTEL_SEMCONV_STABILITY_SIGNAL_MAPPING,
+            {
+                _OpenTelemetryStabilitySignalType.GEN_AI: _StabilityMode.GEN_AI_LATEST_EXPERIMENTAL
+            },
+        )
+        patched_is_recording = patch.object(
+            SdkSpan, "is_recording", return_value=recording
+        )
+        spy = patch(
+            "opentelemetry.instrumentation.google_genai.generate_content._create_completion_details_attributes",
+            wraps=_create_completion_details_attributes,
+        )
+        with (
+            patched_environ,
+            patched_otel_mapping,
+            patched_is_recording,
+            spy as create_attributes,
+        ):
+            self.configure_valid_response(text="Some response")
+            self.generate_content(
+                model="gemini-2.0-flash",
+                contents="Some input",
+                config=GenerateContentConfig(
+                    system_instruction="System instruction",
+                ),
+            )
+            capture_in_span = recording and mode in [
+                ContentCapturingMode.SPAN_ONLY,
+                ContentCapturingMode.SPAN_AND_EVENT,
+            ]
+            capture_in_event = mode in [
+                ContentCapturingMode.EVENT_ONLY,
+                ContentCapturingMode.SPAN_AND_EVENT,
+            ]
+            self.assertEqual(
+                create_attributes.call_count,
+                int(capture_in_span or capture_in_event),
+            )
+            span = self.otel.get_span_named(
+                "generate_content gemini-2.0-flash"
+            )
+            event = self.otel.get_event_named(
+                "gen_ai.client.inference.operation.details"
+            )
+            for attributes, captured in (
+                (span.attributes, capture_in_span),
+                (event.attributes, capture_in_event),
+            ):
+                for key in (
+                    gen_ai_attributes.GEN_AI_INPUT_MESSAGES,
+                    gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES,
+                    gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS,
+                ):
+                    if captured:
+                        self.assertIn(key, attributes)
+                    else:
+                        self.assertNotIn(key, attributes)
 
     def test_new_semconv_log_has_extra_genai_attributes(self):
         patched_environ = patch.dict(
