@@ -53,7 +53,7 @@ else:
         McpClientSession = None
         McpListToolsResult = None
         McpTool = None
-# pylint: disable=too-many-public-methods
+# pylint: disable=too-many-public-methods,too-many-lines
 
 GEN_AI_TOOL_DEFINITIONS = getattr(
     gen_ai_attributes, "GEN_AI_TOOL_DEFINITIONS", "gen_ai.tool.definitions"
@@ -905,36 +905,29 @@ class NonStreamingTestCase(TestCase):
     def _assert_completion_details_built_only_when_captured(
         self, mode: ContentCapturingMode, recording: bool
     ):
-        patched_environ = patch.dict(
-            "os.environ",
-            {
-                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": mode.name,
-                "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental",
-            },
-        )
-        patched_otel_mapping = patch.dict(
-            _OpenTelemetrySemanticConventionStability._OTEL_SEMCONV_STABILITY_SIGNAL_MAPPING,
-            {
-                _OpenTelemetryStabilitySignalType.GEN_AI: _StabilityMode.GEN_AI_LATEST_EXPERIMENTAL
-            },
-        )
-        patched_is_recording = patch.object(
-            SdkSpan, "is_recording", return_value=recording
-        )
-        spy = patch(
-            "opentelemetry.instrumentation.google_genai.generate_content._create_completion_details_attributes",
-            wraps=_create_completion_details_attributes,
-        )
-        json_dumps_spy = patch(
-            "opentelemetry.instrumentation.google_genai.generate_content.gen_ai_json_dumps",
-            wraps=gen_ai_json_dumps,
-        )
         with (
-            patched_environ,
-            patched_otel_mapping,
-            patched_is_recording,
-            spy as create_attributes,
-            json_dumps_spy as json_dumps,
+            patch.dict(
+                "os.environ",
+                {
+                    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": mode.name,
+                    "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental",
+                },
+            ),
+            patch.dict(
+                _OpenTelemetrySemanticConventionStability._OTEL_SEMCONV_STABILITY_SIGNAL_MAPPING,
+                {
+                    _OpenTelemetryStabilitySignalType.GEN_AI: _StabilityMode.GEN_AI_LATEST_EXPERIMENTAL
+                },
+            ),
+            patch.object(SdkSpan, "is_recording", return_value=recording),
+            patch(
+                "opentelemetry.instrumentation.google_genai.generate_content._create_completion_details_attributes",
+                wraps=_create_completion_details_attributes,
+            ) as create_attributes,
+            patch(
+                "opentelemetry.instrumentation.google_genai.generate_content.gen_ai_json_dumps",
+                wraps=gen_ai_json_dumps,
+            ) as json_dumps,
         ):
             self.configure_valid_response(text="Some response")
             self.generate_content(
