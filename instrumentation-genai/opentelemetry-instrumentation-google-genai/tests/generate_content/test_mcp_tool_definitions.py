@@ -7,7 +7,9 @@ import asyncio
 import gc
 import unittest
 import weakref
+from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
 from google.genai.types import GenerateContentConfig
@@ -32,10 +34,10 @@ from .nonstreaming_base import _is_mcp_imported, _mock_mcp_client_session
 
 
 class _FakeMcpTool:
-    def __init__(self, name: str):
-        self.name = name
+    def __init__(self, name: str) -> None:
+        self.name: str = name
 
-    def model_dump(self, exclude_none: bool = False) -> dict:
+    def model_dump(self, exclude_none: bool = False) -> dict[str, Any]:
         return {
             "name": self.name,
             "description": f"{self.name} description",
@@ -78,12 +80,12 @@ def _function_tool(name: str) -> FunctionToolDefinition:
     )
 
 
-def _some_callable_tool():
+def _some_callable_tool() -> None:
     """A callable tool."""
 
 
 class TestMcpSessionToolDefinitions(unittest.TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         mcp_patches = [
             patch.object(generate_content, "_is_mcp_imported", True),
             patch.object(
@@ -109,12 +111,14 @@ class TestMcpSessionToolDefinitions(unittest.TestCase):
         helper.experimental_sem_convs_enabled = experimental_sem_convs_enabled
         return helper
 
-    def _get_tool_definitions(self, tools, **kwargs):
+    def _get_tool_definitions(
+        self, tools: list[Any], **kwargs: bool
+    ) -> list[ToolDefinition]:
         return asyncio.run(
             self._helper(**kwargs)._maybe_get_tool_definitions_async(tools)
         )
 
-    def test_lists_each_session_once_across_calls(self):
+    def test_lists_each_session_once_across_calls(self) -> None:
         session = _FakeMcpSession("search", "fetch")
 
         first = self._get_tool_definitions([session])
@@ -125,7 +129,7 @@ class TestMcpSessionToolDefinitions(unittest.TestCase):
         self.assertEqual(second, expected)
         self.assertEqual(session.list_tools_calls, 1)
 
-    def test_sessions_are_cached_independently(self):
+    def test_sessions_are_cached_independently(self) -> None:
         session_a = _FakeMcpSession("a")
         session_b = _FakeMcpSession("b")
 
@@ -142,9 +146,11 @@ class TestMcpSessionToolDefinitions(unittest.TestCase):
         self.assertEqual(session_a.list_tools_calls, 1)
         self.assertEqual(session_b.list_tools_calls, 1)
 
-    def test_lists_uncached_sessions_concurrently_and_keeps_order(self):
-        async def run():
-            started = []
+    def test_lists_uncached_sessions_concurrently_and_keeps_order(
+        self,
+    ) -> None:
+        async def run() -> list[ToolDefinition]:
+            started: list[_FakeMcpSession] = []
             release = asyncio.Event()
             sessions = [
                 _FakeMcpSession("first", started=started, release=release),
@@ -176,7 +182,7 @@ class TestMcpSessionToolDefinitions(unittest.TestCase):
             ],
         )
 
-    def test_overlapping_calls_share_one_listing_per_session(self):
+    def test_overlapping_calls_share_one_listing_per_session(self) -> None:
         async def run() -> list[list[ToolDefinition]]:
             started: list[_FakeMcpSession] = []
             release = asyncio.Event()
@@ -202,7 +208,7 @@ class TestMcpSessionToolDefinitions(unittest.TestCase):
             asyncio.run(run()), [expected, expected * 2, expected]
         )
 
-    def test_failed_listing_is_not_cached(self):
+    def test_failed_listing_is_not_cached(self) -> None:
         session = _FakeMcpSession("search")
         session.fail_next_listing = True
 
@@ -214,7 +220,7 @@ class TestMcpSessionToolDefinitions(unittest.TestCase):
         )
         self.assertEqual(session.list_tools_calls, 2)
 
-    def test_returned_definitions_do_not_alias_cache(self):
+    def test_returned_definitions_do_not_alias_cache(self) -> None:
         session = _FakeMcpSession("search")
 
         first = self._get_tool_definitions([session])
@@ -225,7 +231,7 @@ class TestMcpSessionToolDefinitions(unittest.TestCase):
             self._get_tool_definitions([session]), [_function_tool("search")]
         )
 
-    def test_cache_entry_is_released_with_session(self):
+    def test_cache_entry_is_released_with_session(self) -> None:
         session = _FakeMcpSession("search")
         self._get_tool_definitions([session])
         self.assertIn(session, generate_content._mcp_session_tool_definitions)
@@ -236,7 +242,7 @@ class TestMcpSessionToolDefinitions(unittest.TestCase):
 
         self.assertIsNone(session_ref())
 
-    def test_does_not_list_tools_without_experimental_sem_convs(self):
+    def test_does_not_list_tools_without_experimental_sem_convs(self) -> None:
         session = _FakeMcpSession("search")
 
         self.assertEqual(
@@ -250,7 +256,7 @@ class TestMcpSessionToolDefinitions(unittest.TestCase):
 
 @unittest.skipUnless(_is_mcp_imported, "mcp is not installed")
 class TestAsyncGenerateContentMcpSessionToolDefinitions(TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         super().setUp()
         env_patch = patch.dict(
             "os.environ",
@@ -269,7 +275,9 @@ class TestAsyncGenerateContentMcpSessionToolDefinitions(TestCase):
             p.start()
             self.addCleanup(p.stop)
 
-    def _assert_tool_definitions_on_each_call(self, generate):
+    def _assert_tool_definitions_on_each_call(
+        self, generate: Callable[[GenerateContentConfig], Awaitable[Any]]
+    ) -> None:
         session = _mock_mcp_client_session()
         config = GenerateContentConfig(tools=[session])
         for _ in range(3):
@@ -282,23 +290,28 @@ class TestAsyncGenerateContentMcpSessionToolDefinitions(TestCase):
         )
         self.assertEqual(len(events), 3)
         for event in events:
-            (tool_definition,) = event.attributes[GEN_AI_TOOL_DEFINITIONS]
+            tool_definitions = event.attributes[GEN_AI_TOOL_DEFINITIONS]
+            self.assertIsInstance(tool_definitions, tuple)
+            (tool_definition,) = tool_definitions
+            self.assertIsInstance(tool_definition, dict)
+            for key in ("name", "description", "type"):
+                self.assertIsInstance(tool_definition[key], str)
             self.assertEqual(tool_definition["name"], "mcp_tool")
             self.assertEqual(
                 tool_definition["description"], "Tool from session"
             )
             self.assertEqual(tool_definition["type"], "function")
 
-    def test_generate_content_lists_session_tools_once(self):
-        async def generate(config):
+    def test_generate_content_lists_session_tools_once(self) -> None:
+        async def generate(config: GenerateContentConfig) -> Any:
             return await self.client.aio.models.generate_content(
                 model="gemini-2.0-flash", contents="Hi", config=config
             )
 
         self._assert_tool_definitions_on_each_call(generate)
 
-    def test_generate_content_stream_lists_session_tools_once(self):
-        async def generate(config):
+    def test_generate_content_stream_lists_session_tools_once(self) -> None:
+        async def generate(config: GenerateContentConfig) -> Any:
             return [
                 response
                 async for response in await self.client.aio.models.generate_content_stream(
