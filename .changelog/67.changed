@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-django`: build `request.build_absolute_uri("?")` for the excluded URLs check at most once per request, and skip it entirely when no excluded URLs are configured

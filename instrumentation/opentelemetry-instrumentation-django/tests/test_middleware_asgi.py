@@ -61,6 +61,7 @@ from opentelemetry.util.http import (
     OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS,
     OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST,
     OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE,
+    ExcludeList,
     get_excluded_urls,
     get_traced_request_attrs,
 )
@@ -468,6 +469,46 @@ class TestMiddlewareAsgi(SimpleTestCase, TestBase):
         await self.async_client.get("/excluded_noarg2/")
         span_list = self.memory_exporter.get_finished_spans()
         self.assertEqual(len(span_list), 1)
+
+    async def test_exclude_lists_build_uri_once_per_request(self):
+        with patch.object(
+            HttpRequest,
+            "build_absolute_uri",
+            autospec=True,
+            side_effect=HttpRequest.build_absolute_uri,
+        ) as build_uri:
+            await self.async_client.get("/excluded_arg/123")
+            self.assertEqual(build_uri.call_count, 1)
+            build_uri.reset_mock()
+
+            await self.async_client.get("/traced/")
+            self.assertEqual(build_uri.call_count, 1)
+            build_uri.reset_mock()
+
+            with self.assertRaises(ValueError):
+                await self.async_client.get("/error/")
+            self.assertEqual(build_uri.call_count, 1)
+
+        span_list = self.memory_exporter.get_finished_spans()
+        self.assertEqual(len(span_list), 2)
+
+    async def test_no_exclude_lists_skips_build_uri(self):
+        with (
+            patch.object(_DjangoMiddleware, "_excluded_urls", ExcludeList([])),
+            patch.object(
+                HttpRequest,
+                "build_absolute_uri",
+                autospec=True,
+                side_effect=HttpRequest.build_absolute_uri,
+            ) as build_uri,
+        ):
+            await self.async_client.get("/excluded_arg/123")
+            with self.assertRaises(ValueError):
+                await self.async_client.get("/error/")
+
+        build_uri.assert_not_called()
+        span_list = self.memory_exporter.get_finished_spans()
+        self.assertEqual(len(span_list), 2)
 
     async def test_span_name(self):
         # test no query_string
