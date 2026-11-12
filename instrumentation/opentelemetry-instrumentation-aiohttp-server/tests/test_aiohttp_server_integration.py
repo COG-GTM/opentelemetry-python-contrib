@@ -580,6 +580,22 @@ async def test_custom_response_headers(
     AioHttpServerInstrumentor().uninstrument()
 
 
+def _patch_header_capture_config_rebuild():
+    """Fails the request if the header capture config is rebuilt."""
+    return (
+        mock.patch.object(
+            aiohttp_server_module,
+            "get_custom_headers",
+            side_effect=AssertionError("env read per request"),
+        ),
+        mock.patch.object(
+            aiohttp_server_module,
+            "SanitizeValue",
+            side_effect=AssertionError("SanitizeValue built per request"),
+        ),
+    )
+
+
 @pytest.mark.asyncio
 async def test_custom_headers_not_captured_when_not_configured(
     test_base: TestBase, aiohttp_server, monkeypatch
@@ -604,32 +620,48 @@ async def test_custom_headers_not_captured_when_not_configured(
     app.router.add_get("/status/200", handler)
     server = await aiohttp_server(app)
 
-    with mock.patch.object(
-        aiohttp_server_module._sanitize_header_fields,
-        "sanitize_header_values",
-    ) as sanitize_header_values:
-        url = f"http://{server.host}:{server.port}/status/200"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url, headers={"custom-test-header-1": "value"}
-            ) as response:
-                assert response.status == 200
+    url = f"http://{server.host}:{server.port}/status/200"
+    headers = {"custom-test-header-1": "value"}
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as response:
+            assert response.status == 200
 
-    sanitize_header_values.assert_not_called()
+        patch_env, patch_sanitize = _patch_header_capture_config_rebuild()
+        with (
+            patch_env as get_custom_headers,
+            patch_sanitize as sanitize_value,
+            mock.patch.object(
+                aiohttp_server_module, "collect_request_headers_attributes"
+            ) as collect_request,
+            mock.patch.object(
+                aiohttp_server_module, "collect_response_headers_attributes"
+            ) as collect_response,
+        ):
+            for _ in range(3):
+                async with session.get(url, headers=headers) as response:
+                    assert response.status == 200
+
+    get_custom_headers.assert_not_called()
+    sanitize_value.assert_not_called()
+    collect_request.assert_not_called()
+    collect_response.assert_not_called()
 
     spans = test_base.get_finished_spans()
-    assert len(spans) == 1
-    assert not [
-        key
-        for key in spans[0].attributes
-        if key.startswith(("http.request.header.", "http.response.header."))
-    ]
+    assert len(spans) == 4
+    for span in spans:
+        assert not [
+            key
+            for key in span.attributes
+            if key.startswith(
+                ("http.request.header.", "http.response.header.")
+            )
+        ]
 
     AioHttpServerInstrumentor().uninstrument()
 
 
 @pytest.mark.asyncio
-async def test_custom_headers_config_read_once_at_instrument_time(
+async def test_custom_headers_config_read_once_per_instrument(
     test_base: TestBase, aiohttp_server, monkeypatch
 ):
     monkeypatch.setenv(
@@ -661,20 +693,21 @@ async def test_custom_headers_config_read_once_at_instrument_time(
         "custom-test-header-1": "value-1",
         "My-Secret-Header": "My Secret Value",
     }
-    with mock.patch.object(
-        aiohttp_server_module,
-        "get_custom_headers",
-        side_effect=AssertionError("env read per request"),
-    ) as get_custom_headers:
-        async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as response:
+            assert response.status == 200
+
+        patch_env, patch_sanitize = _patch_header_capture_config_rebuild()
+        with patch_env as get_custom_headers, patch_sanitize as sanitize_value:
             for _ in range(3):
                 async with session.get(url, headers=headers) as response:
                     assert response.status == 200
 
     get_custom_headers.assert_not_called()
+    sanitize_value.assert_not_called()
 
     spans = test_base.get_finished_spans()
-    assert len(spans) == 3
+    assert len(spans) == 4
     for span in spans:
         assert span.attributes.get(
             "http.request.header.custom_test_header_1"
