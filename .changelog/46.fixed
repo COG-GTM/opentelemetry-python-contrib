@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-pyramid`: acquire the tracer once per app in `trace_tween_factory` instead of on every request, and drop the duplicate `get_default_span_name` call in `_before_traversal`
