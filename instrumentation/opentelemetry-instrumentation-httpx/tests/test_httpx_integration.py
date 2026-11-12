@@ -237,6 +237,42 @@ class BaseTestCases:
                 span, opentelemetry.instrumentation.httpx
             )
 
+        def test_request_url_not_reparsed(self):
+            instrumentation = opentelemetry.instrumentation.httpx
+            with (
+                mock.patch.object(
+                    instrumentation,
+                    "_extract_parameters",
+                    wraps=instrumentation._extract_parameters,
+                ) as extract_mock,
+                mock.patch.object(
+                    instrumentation,
+                    "_apply_request_client_attributes_to_span",
+                    wraps=instrumentation._apply_request_client_attributes_to_span,
+                ) as apply_mock,
+            ):
+                self.perform_request(self.URL)
+
+            span = self.assert_span()
+            self.assertEqual(span.attributes[HTTP_URL], self.URL)
+            request = extract_mock.call_args.args[0][0]
+            self.assertIs(apply_mock.call_args.args[2], request.url)
+            self.assertEqual(apply_mock.call_args.args[9], self.URL)
+
+        def test_headers_not_normalized_when_capture_disabled(self):
+            with mock.patch(
+                "opentelemetry.instrumentation.httpx._normalize_headers"
+            ) as normalize_mock:
+                self.perform_request(
+                    self.URL, headers={"X-Custom-Request": "value"}
+                )
+
+            span = self.assert_span()
+            self.assertIsNone(
+                span.attributes.get("http.request.header.x_custom_request")
+            )
+            normalize_mock.assert_not_called()
+
         def test_basic_metrics(self):
             self.perform_request(self.URL)
             metrics = self.get_sorted_metrics(SCOPE)
