@@ -609,8 +609,14 @@ class TestAiopgIntegration(TestBase):
         pool = async_call(
             db_integration.wrapped_pool(mock_create_pool, {}, {})
         )
+        other_pool = async_call(
+            db_integration.wrapped_pool(mock_create_pool, {}, {})
+        )
+        self.assertIsNot(pool, other_pool)
+        self.assertIs(type(pool), type(other_pool))
+
         cnx1 = async_call(pool.acquire())
-        cnx2 = async_call(pool.acquire())
+        cnx2 = async_call(other_pool.acquire())
         cursor1 = async_call(cnx1.cursor())
         cursor2 = async_call(cnx2.cursor())
 
