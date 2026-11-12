@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -590,6 +591,36 @@ def test_unsampled_spans_skip_content_work(monkeypatch):
     processor.on_span_end(agent)
     assert agent.span_id not in processor._agent_content
     processor.shutdown()
+
+
+def test_missing_otel_span_logs_content_only_at_debug(
+    processor_setup, monkeypatch, caplog
+):
+    processor, _ = processor_setup
+    _, _, generation = _start_agent_with_generation(processor, "trace-d")
+    processor._otel_spans.pop(generation.span_id).end()
+    processor._otel_spans.pop("agent-span").end()
+    built = []
+    original = processor._build_content_payload
+    monkeypatch.setattr(
+        processor,
+        "_build_content_payload",
+        lambda span: built.append(span.span_id) or original(span),
+    )
+
+    with caplog.at_level(logging.INFO, logger=sp.logger.name):
+        processor.on_span_end(generation)
+    assert not built
+
+    with caplog.at_level(logging.DEBUG, logger=sp.logger.name):
+        processor.on_span_end(generation)
+    assert built == [generation.span_id]
+    logged = [
+        record.getMessage()
+        for record in caplog.records
+        if "gen_ai.input.messages=" in record.getMessage()
+    ]
+    assert logged and "question" in logged[0]
 
 
 def test_unsampled_child_still_feeds_recording_agent(processor_setup):
