@@ -1,6 +1,8 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import inspect
 import typing
 from collections.abc import Coroutine
@@ -58,24 +60,39 @@ class AiopgIntegration(DatabaseApiIntegration):
 
 # pylint: disable=abstract-method,no-member
 class TracedConnectionProxy(AsyncProxyObject):
+    _self_db_api_integration: DatabaseApiIntegration
+
     # pylint: disable=unused-argument
-    def __init__(self, connection, db_api_integration, *args, **kwargs):
+    def __init__(
+        self,
+        connection: typing.Any,
+        db_api_integration: DatabaseApiIntegration,
+        *args: typing.Any,
+        **kwargs: typing.Any,
+    ) -> None:
         super().__init__(connection)
         self._self_db_api_integration = db_api_integration
 
-    def cursor(self, *args, **kwargs):
+    def cursor(
+        self, *args: typing.Any, **kwargs: typing.Any
+    ) -> _ContextManager:
         coro = self._cursor(*args, **kwargs)
         return _ContextManager(coro)
 
-    async def _cursor(self, *args, **kwargs):
+    async def _cursor(
+        self, *args: typing.Any, **kwargs: typing.Any
+    ) -> AsyncCursorTracerProxy:
         # pylint: disable=protected-access
         cursor = await self.__wrapped__._cursor(*args, **kwargs)
         return get_traced_cursor_proxy(cursor, self._self_db_api_integration)
 
 
 def get_traced_connection_proxy(
-    connection, db_api_integration, *args, **kwargs
-):
+    connection: typing.Any,
+    db_api_integration: DatabaseApiIntegration,
+    *args: typing.Any,
+    **kwargs: typing.Any,
+) -> TracedConnectionProxy:
     return TracedConnectionProxy(
         connection, db_api_integration, *args, **kwargs
     )
@@ -83,19 +100,29 @@ def get_traced_connection_proxy(
 
 # pylint: disable=abstract-method,no-member
 class TracedPoolProxy(AsyncProxyObject):
+    _self_db_api_integration: DatabaseApiIntegration
+    _self_args: tuple[typing.Any, ...]
+    _self_kwargs: dict[str, typing.Any]
+
     # pylint: disable=unused-argument
-    def __init__(self, pool, db_api_integration, *args, **kwargs):
+    def __init__(
+        self,
+        pool: typing.Any,
+        db_api_integration: DatabaseApiIntegration,
+        *args: typing.Any,
+        **kwargs: typing.Any,
+    ) -> None:
         super().__init__(pool)
         self._self_db_api_integration = db_api_integration
         self._self_args = args
         self._self_kwargs = kwargs
 
-    def acquire(self):
+    def acquire(self) -> _PoolAcquireContextManager:
         """Acquire free connection from the pool."""
         coro = self._acquire()
         return _PoolAcquireContextManager(coro, self)
 
-    async def _acquire(self):
+    async def _acquire(self) -> typing.Any:
         # pylint: disable=protected-access
         connection = await self.__wrapped__._acquire()
         if not isinstance(connection, AsyncProxyObject):
@@ -108,7 +135,12 @@ class TracedPoolProxy(AsyncProxyObject):
         return connection
 
 
-def get_traced_pool_proxy(pool, db_api_integration, *args, **kwargs):
+def get_traced_pool_proxy(
+    pool: typing.Any,
+    db_api_integration: DatabaseApiIntegration,
+    *args: typing.Any,
+    **kwargs: typing.Any,
+) -> TracedPoolProxy:
     return TracedPoolProxy(pool, db_api_integration, *args, **kwargs)
 
 
@@ -148,31 +180,50 @@ class AsyncCursorTracer(CursorTracer):
 
 # pylint: disable=abstract-method,no-member
 class AsyncCursorTracerProxy(AsyncProxyObject):
+    _self_cursor_tracer: AsyncCursorTracer
+
     # pylint: disable=unused-argument
-    def __init__(self, cursor, db_api_integration, *args, **kwargs):
+    def __init__(
+        self,
+        cursor: typing.Any,
+        db_api_integration: DatabaseApiIntegration,
+        *args: typing.Any,
+        **kwargs: typing.Any,
+    ) -> None:
         super().__init__(cursor)
         self._self_cursor_tracer = AsyncCursorTracer(db_api_integration)
 
-    async def execute(self, *args, **kwargs):
+    async def execute(
+        self, *args: typing.Any, **kwargs: typing.Any
+    ) -> typing.Any:
         result = await self._self_cursor_tracer.traced_execution(
             self, self.__wrapped__.execute, *args, **kwargs
         )
         return result
 
-    async def executemany(self, *args, **kwargs):
+    async def executemany(
+        self, *args: typing.Any, **kwargs: typing.Any
+    ) -> typing.Any:
         result = await self._self_cursor_tracer.traced_execution(
             self, self.__wrapped__.executemany, *args, **kwargs
         )
         return result
 
-    async def callproc(self, *args, **kwargs):
+    async def callproc(
+        self, *args: typing.Any, **kwargs: typing.Any
+    ) -> typing.Any:
         result = await self._self_cursor_tracer.traced_execution(
             self, self.__wrapped__.callproc, *args, **kwargs
         )
         return result
 
 
-def get_traced_cursor_proxy(cursor, db_api_integration, *args, **kwargs):
+def get_traced_cursor_proxy(
+    cursor: typing.Any,
+    db_api_integration: DatabaseApiIntegration,
+    *args: typing.Any,
+    **kwargs: typing.Any,
+) -> AsyncCursorTracerProxy:
     return AsyncCursorTracerProxy(cursor, db_api_integration, *args, **kwargs)
 
 
