@@ -215,6 +215,17 @@ duration_histogram_new = None
 active_requests_counter = None
 _excluded_urls = None
 _sem_conv_opt_in_mode = _StabilityMode.DEFAULT
+_capture_request_headers: list[str] = get_custom_headers(
+    OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST
+)
+_capture_response_headers: list[str] = get_custom_headers(
+    OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE
+)
+_sanitize_header_fields = SanitizeValue(
+    get_custom_headers(
+        OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS
+    )
+)
 
 
 def _parse_active_request_count_attrs(
@@ -341,17 +352,11 @@ def collect_request_attributes(
 def collect_request_headers_attributes(
     request: web.Request,
 ) -> dict[str, list[str]]:
-    sanitize = SanitizeValue(
-        get_custom_headers(
-            OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS
-        )
-    )
-
-    return sanitize.sanitize_header_values(
+    if not _capture_request_headers:
+        return {}
+    return _sanitize_header_fields.sanitize_header_values(
         request.headers,
-        get_custom_headers(
-            OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST
-        ),
+        _capture_request_headers,
         normalise_request_header_name,
     )
 
@@ -359,17 +364,11 @@ def collect_request_headers_attributes(
 def collect_response_headers_attributes(
     response: web.Response,
 ) -> dict[str, list[str]]:
-    sanitize = SanitizeValue(
-        get_custom_headers(
-            OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS
-        )
-    )
-
-    return sanitize.sanitize_header_values(
+    if not _capture_response_headers:
+        return {}
+    return _sanitize_header_fields.sanitize_header_values(
         response.headers,
-        get_custom_headers(
-            OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE
-        ),
+        _capture_response_headers,
         normalise_response_header_name,
     )
 
@@ -463,7 +462,7 @@ def create_aiohttp_middleware(
             set_status_on_exception=False,
             record_exception=False,
         ) as span:
-            if span.is_recording():
+            if span.is_recording() and _capture_request_headers:
                 span.set_attributes(
                     collect_request_headers_attributes(request)
                 )
@@ -477,7 +476,7 @@ def create_aiohttp_middleware(
                     request_attrs,
                     _sem_conv_opt_in_mode,
                 )
-                if span.is_recording():
+                if span.is_recording() and _capture_response_headers:
                     response_headers_attributes = (
                         collect_response_headers_attributes(resp)
                     )
@@ -570,6 +569,21 @@ class AioHttpServerInstrumentor(BaseInstrumentor):
 
         global _sem_conv_opt_in_mode  # pylint: disable=global-statement
         _sem_conv_opt_in_mode = sem_conv_opt_in_mode
+
+        global _capture_request_headers  # pylint: disable=global-statement
+        global _capture_response_headers  # pylint: disable=global-statement
+        global _sanitize_header_fields  # pylint: disable=global-statement
+        _capture_request_headers = get_custom_headers(
+            OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST
+        )
+        _capture_response_headers = get_custom_headers(
+            OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE
+        )
+        _sanitize_header_fields = SanitizeValue(
+            get_custom_headers(
+                OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS
+            )
+        )
 
         global tracer  # pylint: disable=global-statement
         tracer = trace.get_tracer(

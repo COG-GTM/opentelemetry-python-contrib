@@ -5,12 +5,16 @@
 
 from enum import Enum
 from http import HTTPStatus
+from unittest import mock
 
 import aiohttp
 import pytest
 import pytest_asyncio
 from multidict import CIMultiDict
 
+from opentelemetry.instrumentation import (
+    aiohttp_server as aiohttp_server_module,
+)
 from opentelemetry.instrumentation._semconv import (
     HTTP_DURATION_HISTOGRAM_BUCKETS_NEW,
     OTEL_SEMCONV_STABILITY_OPT_IN,
@@ -572,6 +576,115 @@ async def test_custom_response_headers(
         assert span.attributes.get(attribute) == value
 
     assert "http.response.header.custom_test_header_3" not in span.attributes
+
+    AioHttpServerInstrumentor().uninstrument()
+
+
+@pytest.mark.asyncio
+async def test_custom_headers_not_captured_when_not_configured(
+    test_base: TestBase, aiohttp_server, monkeypatch
+):
+    monkeypatch.delenv(
+        OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST,
+        raising=False,
+    )
+    monkeypatch.delenv(
+        OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE,
+        raising=False,
+    )
+    AioHttpServerInstrumentor().instrument()
+
+    app = aiohttp.web.Application()
+
+    async def handler(request):
+        return aiohttp.web.Response(
+            text="hello", headers={"custom-test-header-1": "value"}
+        )
+
+    app.router.add_get("/status/200", handler)
+    server = await aiohttp_server(app)
+
+    with mock.patch.object(
+        aiohttp_server_module._sanitize_header_fields,
+        "sanitize_header_values",
+    ) as sanitize_header_values:
+        url = f"http://{server.host}:{server.port}/status/200"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url, headers={"custom-test-header-1": "value"}
+            ) as response:
+                assert response.status == 200
+
+    sanitize_header_values.assert_not_called()
+
+    spans = test_base.get_finished_spans()
+    assert len(spans) == 1
+    assert not [
+        key
+        for key in spans[0].attributes
+        if key.startswith(("http.request.header.", "http.response.header."))
+    ]
+
+    AioHttpServerInstrumentor().uninstrument()
+
+
+@pytest.mark.asyncio
+async def test_custom_headers_config_read_once_at_instrument_time(
+    test_base: TestBase, aiohttp_server, monkeypatch
+):
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS,
+        ".*my-secret.*",
+    )
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST,
+        "custom-test-header-1,.*my-secret.*",
+    )
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE,
+        "custom-test-header-2",
+    )
+    AioHttpServerInstrumentor().instrument()
+
+    app = aiohttp.web.Application()
+
+    async def handler(request):
+        return aiohttp.web.Response(
+            text="hello", headers={"custom-test-header-2": "value-2"}
+        )
+
+    app.router.add_get("/status/200", handler)
+    server = await aiohttp_server(app)
+
+    url = f"http://{server.host}:{server.port}/status/200"
+    headers = {
+        "custom-test-header-1": "value-1",
+        "My-Secret-Header": "My Secret Value",
+    }
+    with mock.patch.object(
+        aiohttp_server_module,
+        "get_custom_headers",
+        side_effect=AssertionError("env read per request"),
+    ) as get_custom_headers:
+        async with aiohttp.ClientSession() as session:
+            for _ in range(3):
+                async with session.get(url, headers=headers) as response:
+                    assert response.status == 200
+
+    get_custom_headers.assert_not_called()
+
+    spans = test_base.get_finished_spans()
+    assert len(spans) == 3
+    for span in spans:
+        assert span.attributes.get(
+            "http.request.header.custom_test_header_1"
+        ) == ("value-1",)
+        assert span.attributes.get("http.request.header.my_secret_header") == (
+            "[REDACTED]",
+        )
+        assert span.attributes.get(
+            "http.response.header.custom_test_header_2"
+        ) == ("value-2",)
 
     AioHttpServerInstrumentor().uninstrument()
 
