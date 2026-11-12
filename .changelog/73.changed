@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-aiohttp-server`: read header capture and sanitize configuration once at instrumentation time instead of on every request
