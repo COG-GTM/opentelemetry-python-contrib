@@ -1617,14 +1617,24 @@ class TestAioHttpClientInstrumentor(TestBase):
         self._assert_spans(0)
         self._assert_metrics(0)
 
-    def test_telemetry_created_once_for_all_sessions(self):
+    def test_telemetry_created_once_for_all_sessions(self) -> None:
         AioHttpClientInstrumentor().uninstrument()
+        real_get_meter = aiohttp_client.get_meter
+        meters: list[mock.Mock] = []
+
+        def get_meter_spy(
+            *args: typing.Any, **kwargs: typing.Any
+        ) -> mock.Mock:
+            meter = mock.Mock(wraps=real_get_meter(*args, **kwargs))
+            meters.append(meter)
+            return meter
+
         with (
             mock.patch.object(
                 aiohttp_client, "get_tracer", wraps=aiohttp_client.get_tracer
             ) as get_tracer,
             mock.patch.object(
-                aiohttp_client, "get_meter", wraps=aiohttp_client.get_meter
+                aiohttp_client, "get_meter", side_effect=get_meter_spy
             ) as get_meter,
             mock.patch.object(
                 aiohttp_client,
@@ -1636,7 +1646,7 @@ class TestAioHttpClientInstrumentor(TestBase):
 
             async def request_per_session(
                 server: aiohttp.test_utils.TestServer,
-            ):
+            ) -> None:
                 for _ in range(3):
                     async with aiohttp.ClientSession() as session:
                         await session.get(server.make_url(self.URL))
@@ -1647,6 +1657,7 @@ class TestAioHttpClientInstrumentor(TestBase):
 
             self.assertEqual(get_tracer.call_count, 1)
             self.assertEqual(get_meter.call_count, 1)
+            self.assertEqual(meters[0].create_histogram.call_count, 1)
             self.assertEqual(get_excluded_urls.call_count, 1)
 
         spans = self._assert_spans(3)
