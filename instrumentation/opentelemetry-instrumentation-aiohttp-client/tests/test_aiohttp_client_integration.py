@@ -14,6 +14,7 @@ from unittest import mock
 
 import aiohttp
 import aiohttp.test_utils
+import multidict
 import yarl
 from http_server_mock import HttpServerMock
 
@@ -33,6 +34,8 @@ from opentelemetry.instrumentation.utils import (
     suppress_http_instrumentation,
     suppress_instrumentation,
 )
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.sampling import ALWAYS_OFF
 from opentelemetry.semconv._incubating.attributes.http_attributes import (
     HTTP_HOST,
     HTTP_METHOD,
@@ -1068,6 +1071,85 @@ class TestAioHttpIntegration(TestBase):
         self.assertNotIn(
             "http.response.header.x_other_response_header", span.attributes
         )
+
+    def test_custom_response_headers_repeated_values_grouped(self):
+        """Test that repeated response headers are captured as one list."""
+        trace_config = aiohttp_client.create_trace_config(
+            captured_response_headers=["X-Multi-Response"],
+        )
+
+        def custom_handler(_request):
+            return aiohttp.web.Response(
+                status=200,
+                text="OK",
+                headers=multidict.CIMultiDict(
+                    [
+                        ("X-Multi-Response", "one"),
+                        ("x-multi-response", "two"),
+                    ]
+                ),
+            )
+
+        self._http_request(
+            trace_config=trace_config,
+            url="/test-path",
+            status_code=200,
+            request_handler=custom_handler,
+        )
+
+        span = self._assert_single_span()
+        self.assertEqual(
+            span.attributes["http.response.header.x_multi_response"],
+            ("one", "two"),
+        )
+
+    def test_headers_not_collected_when_capture_not_configured(self):
+        """Test that header values are not collected when capture is disabled."""
+        with mock.patch.object(
+            aiohttp_client,
+            "_get_header_values",
+            wraps=aiohttp_client._get_header_values,
+        ) as group_header_values:
+            self._http_request(
+                trace_config=aiohttp_client.create_trace_config(),
+                url="/test-path",
+                status_code=200,
+                headers={"X-Request-Header": "request-value"},
+            )
+
+        self._assert_single_span()
+        group_header_values.assert_not_called()
+
+    def test_response_headers_not_collected_when_span_not_recording(self):
+        """Test that response headers are skipped for non-recording spans."""
+        trace_config = aiohttp_client.create_trace_config(
+            captured_request_headers=["X-Request-Header"],
+            captured_response_headers=["X-Response-Header"],
+            tracer_provider=TracerProvider(sampler=ALWAYS_OFF),
+        )
+
+        def custom_handler(_request):
+            return aiohttp.web.Response(
+                status=200,
+                text="OK",
+                headers={"X-Response-Header": "response-value"},
+            )
+
+        with mock.patch.object(
+            aiohttp_client,
+            "_get_header_values",
+            wraps=aiohttp_client._get_header_values,
+        ) as group_header_values:
+            self._http_request(
+                trace_config=trace_config,
+                url="/test-path",
+                status_code=200,
+                request_handler=custom_handler,
+                headers={"X-Request-Header": "request-value"},
+            )
+
+        self.assertEqual(len(self.memory_exporter.get_finished_spans()), 0)
+        group_header_values.assert_called_once()
 
     def test_custom_headers_case_insensitive(self):
         """Test that header capture is case-insensitive."""

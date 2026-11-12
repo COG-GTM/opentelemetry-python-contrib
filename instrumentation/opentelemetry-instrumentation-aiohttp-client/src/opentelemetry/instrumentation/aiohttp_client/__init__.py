@@ -245,7 +245,7 @@ from opentelemetry.util.http import (
     OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_CLIENT_REQUEST,
     OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_CLIENT_RESPONSE,
     OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS,
-    get_custom_header_attributes,
+    SanitizeValue,
     get_custom_headers,
     get_excluded_urls,
     normalise_request_header_name,
@@ -255,6 +255,7 @@ from opentelemetry.util.http import (
 )
 
 if TYPE_CHECKING:
+    import multidict
     from typing_extensions import Unpack
 
     UrlFilterT = typing.Optional[typing.Callable[[yarl.URL], str]]
@@ -287,6 +288,12 @@ if TYPE_CHECKING:
 
     class UninstrumentKwargs(TypedDict, total=False):
         pass
+
+
+def _get_header_values(
+    headers: multidict.CIMultiDictProxy[str] | multidict.CIMultiDict[str],
+) -> dict[str, list[str]]:
+    return {key: headers.getall(key) for key in headers.keys()}
 
 
 def _get_span_name(method: str) -> str:
@@ -414,6 +421,7 @@ def create_trace_config(
         )
 
     excluded_urls = get_excluded_urls("AIOHTTP_CLIENT")
+    header_sanitizer = SanitizeValue(sensitive_headers or ())
 
     def _end_trace(trace_config_ctx: types.SimpleNamespace):
         elapsed_time = max(default_timer() - trace_config_ctx.start_time, 0)
@@ -521,17 +529,14 @@ def create_trace_config(
         except ValueError:
             pass
 
-        span_attributes.update(
-            get_custom_header_attributes(
-                {
-                    key: params.headers.getall(key)
-                    for key in params.headers.keys()
-                },
-                captured_request_headers,
-                sensitive_headers,
-                normalise_request_header_name,
+        if captured_request_headers:
+            span_attributes.update(
+                header_sanitizer.sanitize_header_values(
+                    _get_header_values(params.headers),
+                    captured_request_headers,
+                    normalise_request_header_name,
+                )
             )
-        )
 
         trace_config_ctx.span = trace_config_ctx.tracer.start_span(
             request_span_name, kind=SpanKind.CLIENT, attributes=span_attributes
@@ -563,17 +568,14 @@ def create_trace_config(
             sem_conv_opt_in_mode,
         )
 
-        trace_config_ctx.span.set_attributes(
-            get_custom_header_attributes(
-                {
-                    key: params.response.headers.getall(key)
-                    for key in params.response.headers.keys()
-                },
-                captured_response_headers,
-                sensitive_headers,
-                normalise_response_header_name,
+        if captured_response_headers and trace_config_ctx.span.is_recording():
+            trace_config_ctx.span.set_attributes(
+                header_sanitizer.sanitize_header_values(
+                    _get_header_values(params.response.headers),
+                    captured_response_headers,
+                    normalise_response_header_name,
+                )
             )
-        )
 
         _end_trace(trace_config_ctx)
 
