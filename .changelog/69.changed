@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-google-genai`: avoid dumping and flattening the whole `GenerateContentConfig` on every call when the config-key allowlist admits no `gcp.gen_ai.operation.config.*` keys (the default)
