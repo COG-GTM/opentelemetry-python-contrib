@@ -1,0 +1,1 @@
+`opentelemetry-sdk-extension-aws`: make the X-Ray remote sampler rule cache expiry check lock-free by precomputing the expiry deadline when rules are refreshed

@@ -6,6 +6,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import datetime
+import threading
 from threading import Lock
 from unittest import TestCase
 
@@ -90,6 +91,40 @@ class TestRuleCache(TestCase):
             seconds=CACHE_TTL_SECONDS + 1
         )
         self.assertTrue(cache.expired())
+
+    def test_rule_cache_expiration_follows_rule_updates(self):
+        mock_clock = MockClock(datetime.datetime.fromtimestamp(1707551387.0))
+        cache = _RuleCache(
+            None, Resource.get_empty(), CLIENT_ID, mock_clock, Lock()
+        )
+        mock_clock.add_time(CACHE_TTL_SECONDS)
+        self.assertFalse(cache.expired())
+        mock_clock.add_time(1)
+        self.assertTrue(cache.expired())
+
+        cache.update_sampling_rules(
+            [_SamplingRule(Priority=1, RuleName="abcdef", Version=1)]
+        )
+        self.assertFalse(cache.expired())
+        mock_clock.add_time(CACHE_TTL_SECONDS)
+        self.assertFalse(cache.expired())
+        mock_clock.add_time(1)
+        self.assertTrue(cache.expired())
+
+    def test_rule_cache_expired_does_not_take_lock(self):
+        lock = Lock()
+        cache = _RuleCache(
+            None, Resource.get_empty(), CLIENT_ID, _Clock(), lock
+        )
+        results: list[bool] = []
+        with lock:
+            checker = threading.Thread(
+                target=lambda: results.append(cache.expired()), daemon=True
+            )
+            checker.start()
+            checker.join(timeout=5)
+        self.assertFalse(checker.is_alive(), "expired() blocked on lock")
+        self.assertEqual(results, [False])
 
     def test_update_cache_with_only_one_rule_changed(self):
         cache = _RuleCache(

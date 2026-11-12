@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import datetime
 from logging import getLogger
 from threading import Lock
 from typing import Dict, List, Sequence
@@ -55,6 +56,17 @@ class _RuleCache:  # pyright: ignore[reportUnusedClass]
         self._fallback_sampler = fallback_sampler
         self._clock = clock
         self._last_modified = self._clock.now()
+
+    @property
+    def _last_modified(self) -> datetime.datetime:
+        return self.__last_modified
+
+    @_last_modified.setter
+    def _last_modified(self, value: datetime.datetime) -> None:
+        self.__last_modified = value
+        self.__expires_at = value + self._clock.time_delta(
+            seconds=CACHE_TTL_SECONDS
+        )
 
     def should_sample(
         self,
@@ -183,9 +195,6 @@ class _RuleCache:  # pyright: ignore[reportUnusedClass]
         return all_statistics
 
     def expired(self) -> bool:
-        with self.__cache_lock:
-            return (
-                self._clock.now()
-                > self._last_modified
-                + self._clock.time_delta(seconds=CACHE_TTL_SECONDS)
-            )
+        # Lock-free: called for every span; the deadline is only replaced
+        # atomically when rules are refreshed.
+        return self._clock.now() > self.__expires_at
