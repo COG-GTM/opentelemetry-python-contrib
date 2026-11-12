@@ -155,10 +155,11 @@ ConnectionT = TypeVar(
 CursorT = TypeVar("CursorT", psycopg.Cursor, psycopg.AsyncCursor)
 
 _FIRST_TOKEN = re.compile(r"\S+")
-# Composable rendered by the current traced execution, so that the operation
-# name and the statement attribute share a single ``as_string`` call.
-_RENDERED_COMPOSABLE: ContextVar[tuple[Composable, Any, str] | None] = (
-    ContextVar("otel_psycopg_rendered_composable", default=None)
+# Per traced execution slot holding ``[statement, cursor, rendered]``, so that
+# the operation name and the statement attribute share one ``as_string`` call.
+# ``None`` outside a traced execution, where nothing is cached.
+_RENDERED_COMPOSABLE: ContextVar[list[Any] | None] = ContextVar(
+    "otel_psycopg_rendered_composable", default=None
 )
 
 
@@ -337,8 +338,8 @@ class CursorTracer(dbapi.CursorTracer):
         query_method: Callable[..., Any],
         *args: tuple[Any, ...],
         **kwargs: dict[Any, Any],
-    ):
-        token = _RENDERED_COMPOSABLE.set(None)
+    ) -> Any:
+        token = _RENDERED_COMPOSABLE.set([])
         try:
             return super().traced_execution(
                 cursor, query_method, *args, **kwargs
@@ -352,8 +353,8 @@ class CursorTracer(dbapi.CursorTracer):
         query_method: Callable[..., Awaitable[Any]],
         *args: tuple[Any, ...],
         **kwargs: dict[Any, Any],
-    ):
-        token = _RENDERED_COMPOSABLE.set(None)
+    ) -> Any:
+        token = _RENDERED_COMPOSABLE.set([])
         try:
             return await super().traced_execution_async(
                 cursor, query_method, *args, **kwargs
@@ -364,14 +365,12 @@ class CursorTracer(dbapi.CursorTracer):
     @staticmethod
     def _render_composable(cursor: CursorT, statement: Composable) -> str:
         rendered = _RENDERED_COMPOSABLE.get()
-        if (
-            rendered is not None
-            and rendered[0] is statement
-            and rendered[1] is cursor
-        ):
+        if rendered is None:
+            return statement.as_string(cursor)
+        if rendered and rendered[0] is statement and rendered[1] is cursor:
             return rendered[2]
         text = statement.as_string(cursor)
-        _RENDERED_COMPOSABLE.set((statement, cursor, text))
+        rendered[:] = [statement, cursor, text]
         return text
 
     def get_operation_name(self, cursor: CursorT, args: list[Any]) -> str:
