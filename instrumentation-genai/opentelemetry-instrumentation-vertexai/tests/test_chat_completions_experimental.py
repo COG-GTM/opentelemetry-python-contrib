@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import dataclasses
+from unittest.mock import Mock
+
 import pytest
 from google.api_core.exceptions import BadRequest, NotFound
 from vertexai.generative_models import (
@@ -17,6 +20,7 @@ from vertexai.preview.generative_models import (
 )
 
 from opentelemetry.instrumentation.vertexai import VertexAIInstrumentor
+from opentelemetry.instrumentation.vertexai import patch as vertexai_patch
 
 # Backward compatibility for InMemoryLogExporter -> InMemoryLogRecordExporter rename
 try:
@@ -329,7 +333,10 @@ def test_generate_content_extra_params(
     span_exporter,
     instrument_no_content_with_experimental_semconvs,
     generate_content: callable,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    asdict_spy = Mock(side_effect=dataclasses.asdict)
+    monkeypatch.setattr(vertexai_patch, "asdict", asdict_spy)
     generation_config = GenerationConfig(
         top_k=2,
         top_p=0.95,
@@ -368,6 +375,7 @@ def test_generate_content_extra_params(
         "server.address": "us-central1-aiplatform.googleapis.com",
         "server.port": 443,
     }
+    asdict_spy.assert_not_called()
 
 
 def assert_span_error(span: ReadableSpan) -> None:

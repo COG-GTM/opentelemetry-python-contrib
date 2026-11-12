@@ -203,34 +203,38 @@ class MethodWrappers:
                     span=span,
                     log_record=event,
                 )
-                content_attributes = {
-                    k: [asdict(x) for x in v]
-                    for k, v in [
-                        (
-                            GenAI.GEN_AI_SYSTEM_INSTRUCTIONS,
-                            system_instructions,
-                        ),
-                        (GenAI.GEN_AI_INPUT_MESSAGES, inputs),
-                        (GenAI.GEN_AI_OUTPUT_MESSAGES, outputs),
-                    ]
-                    if v
-                }
-                if span.is_recording():
-                    span.set_attributes(attributes)
-                    if capture_content in (
-                        ContentCapturingMode.SPAN_AND_EVENT,
-                        ContentCapturingMode.SPAN_ONLY,
-                    ):
-                        span.set_attributes(
-                            {
-                                k: gen_ai_json_dumps(v)
-                                for k, v in content_attributes.items()
-                            }
-                        )
-                if capture_content in (
+                capture_on_span = span.is_recording() and capture_content in (
+                    ContentCapturingMode.SPAN_AND_EVENT,
+                    ContentCapturingMode.SPAN_ONLY,
+                )
+                capture_on_event = capture_content in (
                     ContentCapturingMode.SPAN_AND_EVENT,
                     ContentCapturingMode.EVENT_ONLY,
-                ):
+                )
+                content_attributes: dict[str, list[dict[str, Any]]] = {}
+                if capture_on_span or capture_on_event:
+                    content_attributes = {
+                        k: [asdict(x) for x in v]
+                        for k, v in [
+                            (
+                                GenAI.GEN_AI_SYSTEM_INSTRUCTIONS,
+                                system_instructions,
+                            ),
+                            (GenAI.GEN_AI_INPUT_MESSAGES, inputs),
+                            (GenAI.GEN_AI_OUTPUT_MESSAGES, outputs),
+                        ]
+                        if v
+                    }
+                if span.is_recording():
+                    span.set_attributes(attributes)
+                if capture_on_span:
+                    span.set_attributes(
+                        {
+                            k: gen_ai_json_dumps(v)
+                            for k, v in content_attributes.items()
+                        }
+                    )
+                if capture_on_event:
                     event.attributes |= content_attributes
                 self.logger.emit(event)
 
