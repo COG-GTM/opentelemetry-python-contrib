@@ -21,6 +21,7 @@ from opentelemetry.instrumentation.sqlalchemy import (
     SQLAlchemyInstrumentor,
 )
 from opentelemetry.instrumentation.sqlalchemy.engine import (
+    _get_attributes_from_url,
     _get_db_name_from_cursor_or_conn,
 )
 from opentelemetry.instrumentation.utils import suppress_instrumentation
@@ -986,6 +987,86 @@ class TestSqlalchemyInstrumentation(TestBase):
 
         metric_list = self.get_sorted_metrics()
         self.assertEqual(len(metric_list), 0)
+
+    def test_operation_name_computed_once_per_query(self):
+        for enable_commenter, enable_attribute_commenter in (
+            (False, False),
+            (True, False),
+            (True, True),
+        ):
+            with self.subTest(
+                enable_commenter=enable_commenter,
+                enable_attribute_commenter=enable_attribute_commenter,
+            ):
+                SQLAlchemyInstrumentor().uninstrument()
+                self.memory_exporter.clear()
+                engine = create_engine("sqlite:///:memory:")
+                SQLAlchemyInstrumentor().instrument(
+                    engine=engine,
+                    tracer_provider=self.tracer_provider,
+                    enable_commenter=enable_commenter,
+                    enable_attribute_commenter=enable_attribute_commenter,
+                )
+                with engine.connect() as cnx:
+                    with mock.patch.object(
+                        EngineTracer,
+                        "_operation_name",
+                        autospec=True,
+                        side_effect=EngineTracer._operation_name,
+                    ) as operation_name:
+                        cnx.execute(
+                            text("/* leading comment */ SELECT 1 + 1;")
+                        ).fetchall()
+
+                self.assertEqual(operation_name.call_count, 1)
+                query_span = self.memory_exporter.get_finished_spans()[1]
+                self.assertEqual(query_span.name, "SELECT :memory:")
+                self.assertEqual(
+                    query_span.attributes[DB_OPERATION], "SELECT :memory:"
+                )
+
+    def test_attribute_commenter_unterminated_leading_comment(self):
+        # The appended sqlcomment closes an unterminated leading comment, so
+        # the operation must come from the statement used for the span name.
+        engine = create_engine("sqlite:///:memory:")
+        SQLAlchemyInstrumentor().instrument(
+            engine=engine,
+            tracer_provider=self.tracer_provider,
+            enable_commenter=True,
+            enable_attribute_commenter=True,
+        )
+        with engine.connect() as cnx:
+            cnx.execute(text("/* unterminated SELECT 1"))
+
+        query_span = self.memory_exporter.get_finished_spans()[1]
+        self.assertEqual(query_span.name, "/* :memory:")
+        self.assertEqual(query_span.attributes[DB_OPERATION], "/* :memory:")
+
+    def test_url_attributes_computed_once_per_engine(self):
+        engine = create_engine("sqlite:///:memory:")
+        engine_tracer = SQLAlchemyInstrumentor().instrument(
+            engine=engine,
+            tracer_provider=self.tracer_provider,
+        )
+        with engine.connect() as cnx:
+            with mock.patch(
+                "opentelemetry.instrumentation.sqlalchemy.engine._get_attributes_from_url",
+                side_effect=_get_attributes_from_url,
+            ) as get_attributes_from_url:
+                for _ in range(3):
+                    cnx.execute(text("SELECT 1 + 1;")).fetchall()
+
+        get_attributes_from_url.assert_called_once()
+        # sqlite URLs have no host, so the per-query cursor attributes must be
+        # added to a copy rather than to the cached URL attributes.
+        self.assertEqual(
+            engine_tracer._url_attrs_cache[1], {DB_NAME: ":memory:"}
+        )
+        query_spans = self.memory_exporter.get_finished_spans()[1:]
+        self.assertEqual(len(query_spans), 3)
+        for span in query_spans:
+            self.assertEqual(span.attributes[DB_NAME], ":memory:")
+            self.assertEqual(span.attributes[DB_SYSTEM], "sqlite")
 
     def test_get_db_name_from_cursor_or_conn_postgresql_success(self):
         mock_cursor = mock.Mock()
