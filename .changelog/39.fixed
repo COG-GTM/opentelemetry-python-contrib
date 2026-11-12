@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-pymongo`: build the `db.statement` string and collection name only for recording spans, so sampled-out commands no longer `str()` the whole command payload
