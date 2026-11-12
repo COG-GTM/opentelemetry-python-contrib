@@ -51,6 +51,7 @@ _ENVIRON_SPAN_KEY = "opentelemetry-pyramid.span_key"
 _ENVIRON_ACTIVATION_KEY = "opentelemetry-pyramid.activation_key"
 _ENVIRON_ENABLED_KEY = "opentelemetry-pyramid.tracing_enabled_key"
 _ENVIRON_TOKEN = "opentelemetry-pyramid.token"
+_ENVIRON_TRACER_KEY = "opentelemetry-pyramid.tracer"
 
 _logger = getLogger(__name__)
 
@@ -83,7 +84,6 @@ def _insert_tween(config):
 def _before_traversal(event):
     request = event.request
     request_environ = request.environ
-    span_name = otel_wsgi.get_default_span_name(request_environ)
 
     enabled = request_environ.get(_ENVIRON_ENABLED_KEY)
     if enabled is None:
@@ -99,11 +99,7 @@ def _before_traversal(event):
         return
 
     start_time = request_environ.get(_ENVIRON_STARTTIME_KEY)
-    tracer = trace.get_tracer(
-        __name__,
-        __version__,
-        schema_url=_get_schema_url(_sem_conv_opt_in_mode),
-    )
+    tracer = request_environ[_ENVIRON_TRACER_KEY]
 
     if request.matched_route:
         span_name = request.matched_route.pattern
@@ -194,6 +190,11 @@ def trace_tween_factory(handler, registry):
         unit="{request}",
         description="Number of active HTTP server requests.",
     )
+    tracer = trace.get_tracer(
+        __name__,
+        __version__,
+        schema_url=_get_schema_url(_sem_conv_opt_in_mode),
+    )
 
     if not enabled:
         # If disabled, make a tween that signals to the
@@ -218,6 +219,7 @@ def trace_tween_factory(handler, registry):
         )
 
         request.environ[_ENVIRON_ENABLED_KEY] = True
+        request.environ[_ENVIRON_TRACER_KEY] = tracer
         request.environ[_ENVIRON_STARTTIME_KEY] = time_ns()
         active_requests_count_attrs = (
             otel_wsgi._parse_active_request_count_attrs(
