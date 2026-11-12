@@ -1,0 +1,1 @@
+`opentelemetry-exporter-prometheus-remote-write`: reuse a single `requests.Session` across exports so keep-alive connections are reused instead of opening a new connection per export
