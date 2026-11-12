@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-aiohttp-client`: create the tracer, meter, duration histograms and excluded URL list once at instrument time instead of on every `ClientSession` creation

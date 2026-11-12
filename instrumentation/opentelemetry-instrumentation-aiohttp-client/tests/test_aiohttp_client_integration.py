@@ -1617,6 +1617,73 @@ class TestAioHttpClientInstrumentor(TestBase):
         self._assert_spans(0)
         self._assert_metrics(0)
 
+    def test_telemetry_created_once_for_all_sessions(self) -> None:
+        for opt_in, histogram_count in (
+            (None, 1),
+            ("http", 1),
+            ("http/dup", 2),
+        ):
+            with self.subTest(opt_in=opt_in):
+                self.memory_exporter.clear()
+                env = {OTEL_SEMCONV_STABILITY_OPT_IN: opt_in} if opt_in else {}
+                with mock.patch.dict("os.environ", env):
+                    self._assert_telemetry_created_once(histogram_count)
+
+    def _assert_telemetry_created_once(self, histogram_count: int) -> None:
+        AioHttpClientInstrumentor().uninstrument()
+        _OpenTelemetrySemanticConventionStability._initialized = False
+        real_get_meter = aiohttp_client.get_meter
+        meters: list[mock.Mock] = []
+
+        def get_meter_spy(
+            *args: typing.Any, **kwargs: typing.Any
+        ) -> mock.Mock:
+            meter = mock.Mock(wraps=real_get_meter(*args, **kwargs))
+            meters.append(meter)
+            return meter
+
+        with (
+            mock.patch.object(
+                aiohttp_client, "get_tracer", wraps=aiohttp_client.get_tracer
+            ) as get_tracer,
+            mock.patch.object(
+                aiohttp_client, "get_meter", side_effect=get_meter_spy
+            ) as get_meter,
+            mock.patch.object(
+                aiohttp_client,
+                "get_excluded_urls",
+                wraps=aiohttp_client.get_excluded_urls,
+            ) as get_excluded_urls,
+        ):
+            AioHttpClientInstrumentor().instrument()
+            for spy in (get_tracer, get_meter, get_excluded_urls):
+                self.assertEqual(spy.call_count, 1)
+            self.assertEqual(
+                meters[0].create_histogram.call_count, histogram_count
+            )
+
+            async def request_per_session(
+                server: aiohttp.test_utils.TestServer,
+            ) -> None:
+                for _ in range(3):
+                    async with aiohttp.ClientSession() as session:
+                        await session.get(server.make_url(self.URL))
+
+            run_with_test_server(
+                request_per_session, self.URL, self.default_handler
+            )
+
+            for spy in (get_tracer, get_meter, get_excluded_urls):
+                self.assertEqual(spy.call_count, 1)
+            self.assertEqual(
+                meters[0].create_histogram.call_count, histogram_count
+            )
+
+        spans = self._assert_spans(3)
+        self.assertEqual(
+            len({span.instrumentation_scope.name for span in spans}), 1
+        )
+
 
 class TestLoadingAioHttpInstrumentor(unittest.TestCase):
     def test_loading_instrumentor(self):
