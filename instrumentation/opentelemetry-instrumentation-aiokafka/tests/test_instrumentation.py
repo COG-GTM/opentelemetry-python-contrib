@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any, Sequence, cast
 from unittest import IsolatedAsyncioTestCase, TestCase, mock
@@ -378,6 +379,38 @@ class TestAIOKafkaInstrumentation(TestBase, IsolatedAsyncioTestCase):
 
         span_list = self.memory_exporter.get_finished_spans()
         self._compare_spans(span_list, expected_spans)
+
+    async def test_getmany_serializes_bootstrap_servers_once_per_client(
+        self,
+    ) -> None:
+        consumer = await self.consumer_factory(
+            bootstrap_servers=["host1:9092", "host2:9092"]
+        )
+        self.addAsyncCleanup(consumer.stop)
+        fetched_records_mock = cast(
+            mock.AsyncMock, consumer._fetcher.fetched_records
+        )
+        fetched_records_mock.side_effect = [
+            self.consumer_batch_factory((), ()),
+            self.consumer_batch_factory((), ()),
+        ]
+        self.memory_exporter.clear()
+
+        with mock.patch(
+            "opentelemetry.instrumentation.aiokafka.utils.json.dumps",
+            wraps=json.dumps,
+        ) as dumps_mock:
+            await consumer.getmany()
+            await consumer.getmany()
+
+        dumps_mock.assert_called_once_with(["host1:9092", "host2:9092"])
+        span_list = self.memory_exporter.get_finished_spans()
+        self.assertEqual(len(span_list), 10)
+        for span in span_list:
+            self.assertEqual(
+                span.attributes[server_attributes.SERVER_ADDRESS],
+                '["host1:9092", "host2:9092"]',
+            )
 
     async def test_send(self) -> None:
         producer = await self.producer_factory()

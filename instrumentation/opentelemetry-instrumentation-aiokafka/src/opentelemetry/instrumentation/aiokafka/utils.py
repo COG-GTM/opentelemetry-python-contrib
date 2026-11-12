@@ -20,6 +20,7 @@ from typing import (
     Tuple,
     cast,
 )
+from weakref import WeakKeyDictionary
 
 import aiokafka
 
@@ -84,6 +85,19 @@ def _extract_bootstrap_servers(
     client: aiokafka.AIOKafkaClient,
 ) -> str | list[str]:
     return client._bootstrap_servers
+
+
+_server_address_cache: WeakKeyDictionary[aiokafka.AIOKafkaClient, str] = (
+    WeakKeyDictionary()
+)
+
+
+def _get_server_address(client: aiokafka.AIOKafkaClient) -> str:
+    server_address = _server_address_cache.get(client)
+    if server_address is None:
+        server_address = json.dumps(_extract_bootstrap_servers(client))
+        _server_address_cache[client] = server_address
+    return server_address
 
 
 def _extract_client_id(client: aiokafka.AIOKafkaClient) -> str:
@@ -232,7 +246,7 @@ _aiokafka_setter = AIOKafkaContextSetter()
 def _enrich_base_span(
     span: Span,
     *,
-    bootstrap_servers: str | list[str],
+    server_address: str,
     client_id: str,
     topic: str,
     partition: int | None,
@@ -242,9 +256,7 @@ def _enrich_base_span(
         messaging_attributes.MESSAGING_SYSTEM,
         messaging_attributes.MessagingSystemValues.KAFKA.value,
     )
-    span.set_attribute(
-        server_attributes.SERVER_ADDRESS, json.dumps(bootstrap_servers)
-    )
+    span.set_attribute(server_attributes.SERVER_ADDRESS, server_address)
     span.set_attribute(messaging_attributes.MESSAGING_CLIENT_ID, client_id)
     span.set_attribute(messaging_attributes.MESSAGING_DESTINATION_NAME, topic)
 
@@ -263,7 +275,7 @@ def _enrich_base_span(
 def _enrich_send_span(
     span: Span,
     *,
-    bootstrap_servers: str | list[str],
+    server_address: str,
     client_id: str,
     topic: str,
     partition: int | None,
@@ -274,7 +286,7 @@ def _enrich_send_span(
 
     _enrich_base_span(
         span,
-        bootstrap_servers=bootstrap_servers,
+        server_address=server_address,
         client_id=client_id,
         topic=topic,
         partition=partition,
@@ -291,7 +303,7 @@ def _enrich_send_span(
 def _enrich_getone_span(
     span: Span,
     *,
-    bootstrap_servers: str | list[str],
+    server_address: str,
     client_id: str,
     consumer_group: str | None,
     topic: str,
@@ -304,7 +316,7 @@ def _enrich_getone_span(
 
     _enrich_base_span(
         span,
-        bootstrap_servers=bootstrap_servers,
+        server_address=server_address,
         client_id=client_id,
         topic=topic,
         partition=partition,
@@ -340,7 +352,7 @@ def _enrich_getone_span(
 def _enrich_getmany_poll_span(
     span: Span,
     *,
-    bootstrap_servers: str | list[str],
+    server_address: str,
     client_id: str,
     consumer_group: str | None,
     message_count: int,
@@ -352,9 +364,7 @@ def _enrich_getmany_poll_span(
         messaging_attributes.MESSAGING_SYSTEM,
         messaging_attributes.MessagingSystemValues.KAFKA.value,
     )
-    span.set_attribute(
-        server_attributes.SERVER_ADDRESS, json.dumps(bootstrap_servers)
-    )
+    span.set_attribute(server_attributes.SERVER_ADDRESS, server_address)
     span.set_attribute(messaging_attributes.MESSAGING_CLIENT_ID, client_id)
 
     if consumer_group is not None:
@@ -378,7 +388,7 @@ def _enrich_getmany_poll_span(
 def _enrich_getmany_topic_span(
     span: Span,
     *,
-    bootstrap_servers: str | list[str],
+    server_address: str,
     client_id: str,
     consumer_group: str | None,
     topic: str,
@@ -390,7 +400,7 @@ def _enrich_getmany_topic_span(
 
     _enrich_base_span(
         span,
-        bootstrap_servers=bootstrap_servers,
+        server_address=server_address,
         client_id=client_id,
         topic=topic,
         partition=partition,
@@ -435,7 +445,7 @@ def _wrap_send(  # type: ignore[reportUnusedFunction]
             kwargs["headers"] = headers
 
         topic = _extract_send_topic(args, kwargs)
-        bootstrap_servers = _extract_bootstrap_servers(instance.client)
+        server_address = _get_server_address(instance.client)
         client_id = _extract_client_id(instance.client)
         key = _deserialize_key(_extract_send_key(args, kwargs))
         partition = await _extract_send_partition(instance, args, kwargs)
@@ -445,7 +455,7 @@ def _wrap_send(  # type: ignore[reportUnusedFunction]
         ) as span:
             _enrich_send_span(
                 span,
-                bootstrap_servers=bootstrap_servers,
+                server_address=server_address,
                 client_id=client_id,
                 topic=topic,
                 partition=partition,
@@ -472,7 +482,7 @@ async def _create_consumer_span(
     async_consume_hook: ConsumeHookT | None,
     record: aiokafka.ConsumerRecord[object, object],
     extracted_context: Context,
-    bootstrap_servers: str | list[str],
+    server_address: str,
     client_id: str,
     consumer_group: str | None,
     args: tuple[aiokafka.TopicPartition, ...],
@@ -488,7 +498,7 @@ async def _create_consumer_span(
         token = context.attach(new_context)
         _enrich_getone_span(
             span,
-            bootstrap_servers=bootstrap_servers,
+            server_address=server_address,
             client_id=client_id,
             consumer_group=consumer_group,
             topic=record.topic,
@@ -519,7 +529,7 @@ def _wrap_getone(  # type: ignore[reportUnusedFunction]
         record = await func(*args, **kwargs)
 
         if record:
-            bootstrap_servers = _extract_bootstrap_servers(instance._client)
+            server_address = _get_server_address(instance._client)
             client_id = _extract_client_id(instance._client)
             consumer_group = _extract_consumer_group(instance)
 
@@ -531,7 +541,7 @@ def _wrap_getone(  # type: ignore[reportUnusedFunction]
                 async_consume_hook,
                 record,
                 extracted_context,
-                bootstrap_servers,
+                server_address,
                 client_id,
                 consumer_group,
                 args,
@@ -564,7 +574,7 @@ def _wrap_getmany(  # type: ignore[reportUnusedFunction]
         records = await func(*args, **kwargs)
 
         if records:
-            bootstrap_servers = _extract_bootstrap_servers(instance._client)
+            server_address = _get_server_address(instance._client)
             client_id = _extract_client_id(instance._client)
             consumer_group = _extract_consumer_group(instance)
 
@@ -577,7 +587,7 @@ def _wrap_getmany(  # type: ignore[reportUnusedFunction]
             ) as poll_span:
                 _enrich_getmany_poll_span(
                     poll_span,
-                    bootstrap_servers=bootstrap_servers,
+                    server_address=server_address,
                     client_id=client_id,
                     consumer_group=consumer_group,
                     message_count=sum(len(r) for r in records.values()),
@@ -590,7 +600,7 @@ def _wrap_getmany(  # type: ignore[reportUnusedFunction]
                     ) as topic_span:
                         _enrich_getmany_topic_span(
                             topic_span,
-                            bootstrap_servers=bootstrap_servers,
+                            server_address=server_address,
                             client_id=client_id,
                             consumer_group=consumer_group,
                             topic=topic.topic,
@@ -607,7 +617,7 @@ def _wrap_getmany(  # type: ignore[reportUnusedFunction]
                                 async_consume_hook,
                                 record,
                                 extracted_context,
-                                bootstrap_servers,
+                                server_address,
                                 client_id,
                                 consumer_group,
                                 args,
