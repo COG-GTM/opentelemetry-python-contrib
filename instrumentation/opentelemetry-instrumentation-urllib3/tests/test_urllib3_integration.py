@@ -1,6 +1,7 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import json
 import typing
 from unittest import mock
@@ -1022,3 +1023,92 @@ class TestURLLib3Instrumentor(TestBase):
         self.assertEqual(
             span.attributes["http.request.header.x_test"], ("Value",)
         )
+
+    def test_urlopen_does_not_bind_signature(self):
+        previous_propagator = get_global_textmap()
+        set_global_textmap(MockTextMapPropagator())
+        self.addCleanup(set_global_textmap, previous_propagator)
+        pool = urllib3.HTTPConnectionPool("mock")
+        calls = (
+            (
+                "positional",
+                lambda h: pool.urlopen("GET", "/status/200", None, h),
+            ),
+            (
+                "keyword",
+                lambda h: pool.urlopen("GET", "/status/200", headers=h),
+            ),
+            (
+                "all_keyword",
+                lambda h: pool.urlopen(
+                    method="GET", url="/status/200", headers=h
+                ),
+            ),
+        )
+        for name, call in calls:
+            with self.subTest(name):
+                self.memory_exporter.clear()
+                headers = {"X-Test": "Value"}
+                with mock.patch.object(
+                    inspect.Signature, "bind", autospec=True
+                ) as bind:
+                    response = call(headers)
+                bind.assert_not_called()
+                self.assertEqual(b"Hello!", response.data)
+
+                span = self.assert_span()
+                sent_headers = {
+                    key.lower(): value
+                    for key, value in Mocket.last_request().headers.items()
+                }
+                self.assertEqual(sent_headers["x-test"], "Value")
+                self.assertEqual(
+                    sent_headers[MockTextMapPropagator.TRACE_ID_KEY],
+                    str(span.get_span_context().trace_id),
+                )
+                self.assertEqual(headers, {"X-Test": "Value"})
+
+    def test_urlopen_positional_headers_preserve_other_args(self):
+        pool = urllib3.HTTPConnectionPool("mock")
+        timeout = urllib3.util.Timeout(5)
+        with mock.patch.object(
+            urllib3.connectionpool.HTTPConnectionPool,
+            "_make_request",
+            autospec=True,
+            wraps=urllib3.connectionpool.HTTPConnectionPool._make_request,
+        ) as make_request:
+            response = pool.urlopen(
+                "GET",
+                "/status/200",
+                None,
+                {"X-Test": "Value"},
+                None,
+                True,
+                True,
+                timeout,
+            )
+        self.assertEqual(b"Hello!", response.data)
+        self.assert_span()
+        self.assertEqual(make_request.call_args.kwargs["timeout"].total, 5)
+
+    def test_urlopen_invalid_arguments_not_traced(self):
+        pool = urllib3.HTTPConnectionPool("mock")
+        invalid_calls = (
+            ("missing_url", lambda: pool.urlopen("GET")),
+            (
+                "duplicate_method",
+                lambda: pool.urlopen("GET", "/status/200", method="GET"),
+            ),
+            (
+                "duplicate_headers",
+                lambda: pool.urlopen(
+                    "GET", "/status/200", None, {}, headers={}
+                ),
+            ),
+            ("too_many_positional", lambda: pool.urlopen("GET", *range(20))),
+        )
+        for name, call in invalid_calls:
+            with self.subTest(name):
+                with self.assertRaises(TypeError):
+                    call()
+                self.assert_span(num_spans=0)

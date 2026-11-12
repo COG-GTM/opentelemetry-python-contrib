@@ -177,7 +177,6 @@ import inspect
 import io
 import typing
 from dataclasses import dataclass
-from inspect import BoundArguments
 from timeit import default_timer
 from typing import Collection
 
@@ -406,6 +405,66 @@ class URLLib3Instrumentor(BaseInstrumentor):
         _uninstrument()
 
 
+class _UrlopenArgs:
+    """Reads the arguments of ``HTTPConnectionPool.urlopen`` calls.
+
+    Avoids ``inspect.Signature.bind`` on every request by reading the
+    parameters the instrumentation needs straight from ``args``/``kwargs``.
+    """
+
+    def __init__(self, signature: inspect.Signature):
+        params = [
+            param
+            for param in list(signature.parameters.values())[1:]  # ``self``
+            if param.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+        ]
+        self._positional = tuple(param.name for param in params)
+        self._required = tuple(
+            index
+            for index, param in enumerate(params)
+            if param.default is inspect.Parameter.empty
+        )
+        self._index = {name: i for i, name in enumerate(self._positional)}
+        self._headers_index = self._index["headers"]
+
+    def is_bindable(
+        self, args: tuple[typing.Any, ...], kwargs: dict[str, typing.Any]
+    ) -> bool:
+        """Whether ``urlopen(*args, **kwargs)`` binds to the signature."""
+        num_args = len(args)
+        if num_args > len(self._positional):
+            return False
+        for name in self._positional[:num_args]:
+            if name in kwargs:
+                return False
+        for index in self._required:
+            if index >= num_args and self._positional[index] not in kwargs:
+                return False
+        return True
+
+    def get(
+        self,
+        args: tuple[typing.Any, ...],
+        kwargs: dict[str, typing.Any],
+        name: str,
+    ) -> typing.Any:
+        index = self._index[name]
+        if index < len(args):
+            return args[index]
+        return kwargs.get(name)
+
+    def with_headers(
+        self,
+        args: tuple[typing.Any, ...],
+        kwargs: dict[str, typing.Any],
+        headers: typing.Any,
+    ) -> tuple[tuple[typing.Any, ...], dict[str, typing.Any]]:
+        index = self._headers_index
+        if index < len(args):
+            return args[:index] + (headers,) + args[index + 1 :], kwargs
+        return args, {**kwargs, "headers": headers}
+
+
 def _get_span_name(sanitized_method: str) -> str:
     if sanitized_method == "_OTHER":
         return "HTTP"
@@ -433,22 +492,24 @@ def _instrument(
     urlopen_signature = inspect.signature(
         urllib3.connectionpool.HTTPConnectionPool.urlopen
     )
+    urlopen_args = _UrlopenArgs(urlopen_signature)
 
     def instrumented_urlopen(wrapped, instance, args, kwargs):
         if not is_http_instrumentation_enabled():
             return wrapped(*args, **kwargs)
 
-        try:
-            bound_args = urlopen_signature.bind(instance, *args, **kwargs)
-        except TypeError:
-            return wrapped(*args, **kwargs)
+        if not urlopen_args.is_bindable(args, kwargs):
+            try:
+                urlopen_signature.bind(instance, *args, **kwargs)
+            except TypeError:
+                return wrapped(*args, **kwargs)
 
-        bound_args.apply_defaults()
-
-        method = bound_args.arguments.get("method").upper()
-        headers = bound_args.arguments.get("headers")
-        body = bound_args.arguments.get("body")
-        url = _get_url(instance, bound_args, url_filter)
+        method = urlopen_args.get(args, kwargs, "method").upper()
+        headers = urlopen_args.get(args, kwargs, "headers")
+        body = urlopen_args.get(args, kwargs, "body")
+        url = _get_url(
+            instance, urlopen_args.get(args, kwargs, "url"), url_filter
+        )
 
         if excluded_urls and excluded_urls.url_disabled(url):
             return wrapped(*args, **kwargs)
@@ -495,12 +556,12 @@ def _instrument(
                     ),
                 )
             inject(headers)
-            bound_args.arguments["headers"] = headers
+            args, kwargs = urlopen_args.with_headers(args, kwargs, headers)
 
             # TODO: add error handling to also set exception `error.type` in new semconv
             with suppress_http_instrumentation():
                 start_time = default_timer()
-                response = wrapped(*bound_args.args[1:], **bound_args.kwargs)
+                response = wrapped(*args, **kwargs)
                 duration_s = default_timer() - start_time
             # set http status code based on semconv
             metric_attributes = {}
@@ -558,10 +619,9 @@ def _instrument(
 
 def _get_url(
     instance: urllib3.connectionpool.HTTPConnectionPool,
-    bound_args: BoundArguments,
+    url_or_path: str,
     url_filter: _UrlFilterT,
 ) -> str:
-    url_or_path = bound_args.arguments.get("url")
     if not url_or_path.startswith("/"):
         url = url_or_path
     else:
