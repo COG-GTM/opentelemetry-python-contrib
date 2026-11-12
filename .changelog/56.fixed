@@ -1,0 +1,1 @@
+`opentelemetry-exporter-richconsole`: build the span tree in linear time and keep sibling batch order

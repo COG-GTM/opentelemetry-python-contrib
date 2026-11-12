@@ -43,6 +43,7 @@ API
 
 import datetime
 import typing
+from collections import defaultdict
 from typing import Dict, Optional
 
 from rich.console import Console
@@ -173,38 +174,37 @@ class RichConsoleSpanExporter(SpanExporter):
         *,
         suppress_resource: bool = False,
     ) -> Dict[str, Tree]:
-        trees = {}
-        parents = {}
         spans = list(spans)
         span_ids = {s.context.span_id for s in spans}
-        while spans:
-            for span in spans:
-                if not span.parent or span.parent.span_id not in span_ids:
-                    trace_id = opentelemetry.trace.format_trace_id(
-                        span.context.trace_id
+        roots = []
+        children = defaultdict(list)
+        for span in spans:
+            if not span.parent or span.parent.span_id not in span_ids:
+                roots.append(span)
+            else:
+                children[span.parent.span_id].append(span)
+
+        trees = {}
+        for root in roots:
+            trace_id = opentelemetry.trace.format_trace_id(
+                root.context.trace_id
+            )
+            tree = trees.setdefault(trace_id, Tree(label=f"Trace {trace_id}"))
+            stack = [(tree, root)]
+            while stack:
+                node, span = stack.pop()
+                child = node.add(
+                    label=Text.from_markup(
+                        f"[blue][{_ns_to_time(span.start_time)}][/blue] [bold]{span.name}[/bold], span {opentelemetry.trace.format_span_id(span.context.span_id)}"
                     )
-                    tree = trees.setdefault(
-                        trace_id, Tree(label=f"Trace {trace_id}")
+                )
+                _child_to_tree(
+                    child, span, suppress_resource=suppress_resource
+                )
+                stack.extend(
+                    (child, grandchild)
+                    for grandchild in reversed(
+                        children.pop(span.context.span_id, ())
                     )
-                    child = tree.add(
-                        label=Text.from_markup(
-                            f"[blue][{_ns_to_time(span.start_time)}][/blue] [bold]{span.name}[/bold], span {opentelemetry.trace.format_span_id(span.context.span_id)}"
-                        )
-                    )
-                    parents[span.context.span_id] = child
-                    _child_to_tree(
-                        child, span, suppress_resource=suppress_resource
-                    )
-                    spans.remove(span)
-                elif span.parent and span.parent.span_id in parents:
-                    child = parents[span.parent.span_id].add(
-                        label=Text.from_markup(
-                            f"[blue][{_ns_to_time(span.start_time)}][/blue] [bold]{span.name}[/bold], span {opentelemetry.trace.format_span_id(span.context.span_id)}"
-                        )
-                    )
-                    parents[span.context.span_id] = child
-                    _child_to_tree(
-                        child, span, suppress_resource=suppress_resource
-                    )
-                    spans.remove(span)
+                )
         return trees

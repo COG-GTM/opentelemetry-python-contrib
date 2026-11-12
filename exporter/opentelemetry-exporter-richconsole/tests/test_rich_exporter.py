@@ -126,3 +126,108 @@ def test_suppress_resource(span_processor):
         assert "resource" not in label.lower()
 
         nodes.extend(node.children)
+
+
+def _span_children(node: Tree) -> list[Tree]:
+    return [
+        child
+        for child in node.children
+        if isinstance(child.label, Text) and ", span " in child.label.plain
+    ]
+
+
+def _span_name(node: Tree) -> str:
+    return node.label.plain.split("] ", 1)[1].split(",", 1)[0]
+
+
+def _child_names(node: Tree) -> list[str]:
+    return [_span_name(child) for child in _span_children(node)]
+
+
+def test_children_before_parents(
+    tracer_provider: trace.TracerProvider,
+) -> None:
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("root") as root:
+        with tracer.start_as_current_span("a") as span_a:
+            with tracer.start_as_current_span("a1") as span_a1:
+                with tracer.start_as_current_span("a1x") as span_a1x:
+                    pass
+        with tracer.start_as_current_span("b") as span_b:
+            pass
+
+    trees = RichConsoleSpanExporter.spans_to_tree(
+        (span_a1x, span_a1, span_b, span_a, root)
+    )
+
+    assert len(trees) == 1
+    tree = next(iter(trees.values()))
+    assert walk_tree(tree) == 5
+    assert _child_names(tree) == ["root"]
+    root_node = _span_children(tree)[0]
+    assert _child_names(root_node) == ["b", "a"]
+    node_a = _span_children(root_node)[1]
+    assert _child_names(node_a) == ["a1"]
+    assert _child_names(_span_children(node_a)[0]) == ["a1x"]
+
+
+def test_siblings_keep_batch_order(
+    tracer_provider: trace.TracerProvider,
+) -> None:
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("parent") as parent:
+        siblings = []
+        for index in range(6):
+            with tracer.start_as_current_span(f"child_{index}") as child:
+                siblings.append(child)
+
+    trees = RichConsoleSpanExporter.spans_to_tree((*siblings, parent))
+
+    tree = next(iter(trees.values()))
+    assert _child_names(_span_children(tree)[0]) == [
+        f"child_{index}" for index in range(6)
+    ]
+
+
+def test_roots_keep_batch_order(
+    tracer_provider: trace.TracerProvider,
+) -> None:
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("parent"):
+        orphans = []
+        for index in range(6):
+            with tracer.start_as_current_span(f"orphan_{index}") as span:
+                orphans.append(span)
+
+    trees = RichConsoleSpanExporter.spans_to_tree(orphans)
+
+    assert _child_names(next(iter(trees.values()))) == [
+        f"orphan_{index}" for index in range(6)
+    ]
+
+
+@pytest.mark.timeout(30)
+def test_deep_trace_reversed_batch() -> None:
+    tracer = trace.TracerProvider().get_tracer(__name__)
+    root = tracer.start_span("root")
+    spans = [root]
+    for _ in range(1000):
+        spans.append(
+            tracer.start_span(
+                "deep",
+                context=opentelemetry.trace.set_span_in_context(spans[-1]),
+            )
+        )
+    for span in spans:
+        span.end()
+
+    trees = RichConsoleSpanExporter.spans_to_tree(spans[::-1])
+
+    assert len(trees) == 1
+    node = next(iter(trees.values()))
+    depth = 0
+    while children := _span_children(node):
+        assert len(children) == 1
+        node = children[0]
+        depth += 1
+    assert depth == 1001
