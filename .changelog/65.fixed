@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-asgi`: Decode request headers once per request instead of on every header lookup
