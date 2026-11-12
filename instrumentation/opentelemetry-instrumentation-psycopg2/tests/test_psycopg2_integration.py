@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import types
+from typing import Any
 from unittest import mock
 
 import psycopg2
@@ -162,10 +163,10 @@ class TestPostgresqlIntegration(TestBase):
 
     def test_get_operation_name_splits_only_first_token(self) -> None:
         tracer = CursorTracer(mock.Mock())
-        split_calls = []
+        split_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
 
         class RecordingStr(str):
-            def split(self, *args, **kwargs):
+            def split(self, *args: Any, **kwargs: Any) -> list[str]:
                 split_calls.append((args, kwargs))
                 return super().split(*args, **kwargs)
 
