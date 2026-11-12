@@ -54,7 +54,12 @@ from opentelemetry.semconv._incubating.attributes.net_attributes import (
     NET_HOST_NAME,
 )
 from opentelemetry.test.test_base import TestBase
-from opentelemetry.trace import NoOpTracerProvider, SpanKind, StatusCode
+from opentelemetry.trace import (
+    NoOpTracerProvider,
+    SpanKind,
+    StatusCode,
+    get_tracer,
+)
 from opentelemetry.trace.propagation.tracecontext import (
     TraceContextTextMapPropagator,
 )
@@ -648,6 +653,30 @@ class TestAwsLambdaInstrumentor(TestAwsLambdaInstrumentorBase):
         mock_execute_lambda(MOCK_LAMBDA_API_GATEWAY_HTTP_API_EVENT)
         spans = self.memory_exporter.get_finished_spans()
         self.assertEqual(len(spans), 0)
+
+    def test_tracer_created_once_across_invocations(self):
+        with mock.patch(
+            "opentelemetry.instrumentation.aws_lambda.get_tracer",
+            wraps=get_tracer,
+        ) as get_tracer_mock:
+            AwsLambdaInstrumentor().instrument()
+
+            mock_execute_lambda(MOCK_LAMBDA_API_GATEWAY_HTTP_API_EVENT)
+            mock_execute_lambda(MOCK_LAMBDA_API_GATEWAY_HTTP_API_EVENT)
+            mock_execute_lambda(MOCK_LAMBDA_API_GATEWAY_HTTP_API_EVENT)
+
+        get_tracer_mock.assert_called_once()
+        spans = self.memory_exporter.get_finished_spans()
+        self.assertEqual(len(spans), 3)
+        for span in spans:
+            self.assertEqual(
+                span.instrumentation_scope.name,
+                "opentelemetry.instrumentation.aws_lambda",
+            )
+            self.assertEqual(
+                span.instrumentation_scope.schema_url,
+                "https://opentelemetry.io/schemas/1.11.0",
+            )
 
     def test_no_op_tracer_provider(self):
         tracer_provider = NoOpTracerProvider()
