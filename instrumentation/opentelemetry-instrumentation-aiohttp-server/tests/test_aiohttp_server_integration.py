@@ -3,6 +3,7 @@
 
 # pylint: disable=too-many-lines
 
+from contextlib import AbstractContextManager
 from enum import Enum
 from http import HTTPStatus
 from unittest import mock
@@ -580,7 +581,10 @@ async def test_custom_response_headers(
     AioHttpServerInstrumentor().uninstrument()
 
 
-def _patch_header_capture_config_rebuild():
+def _patch_header_capture_config_rebuild() -> tuple[
+    AbstractContextManager[mock.MagicMock],
+    AbstractContextManager[mock.MagicMock],
+]:
     """Fails the request if the header capture config is rebuilt."""
     return (
         mock.patch.object(
