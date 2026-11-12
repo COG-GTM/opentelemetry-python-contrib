@@ -147,7 +147,7 @@ class TestAsyncPGInstrumentation(TestBase):
 
         # init the cursor and fetch a single record
         crs = cursor.Cursor(
-            conn, "\n  /* c */ SELECT *\n  FROM test", state, [], Record
+            conn, "/* c */\n  SELECT *\n  FROM test", state, [], Record
         )
         asyncio.run(crs._init(1))
         asyncio.run(crs.fetch(1))
@@ -301,7 +301,8 @@ class TestAsyncPGInstrumentation(TestBase):
         self,
     ):
         cases = {
-            "\n  /* leading comment */\n  SELECT *\n  FROM t": "SELECT",
+            "/* leading comment */\n  SELECT *\n  FROM t": "SELECT",
+            "\n\t  SELECT 1": "SELECT",
             "   ": "",
         }
         for query, expected_name in cases.items():
