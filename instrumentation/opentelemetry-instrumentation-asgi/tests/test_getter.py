@@ -3,7 +3,11 @@
 
 from unittest import TestCase
 
-from opentelemetry.instrumentation.asgi import ASGIGetter
+from opentelemetry.instrumentation.asgi import (
+    ASGIGetter,
+    _RequestHeaders,
+    _RequestHeadersGetter,
+)
 
 
 class TestASGIGetter(TestCase):
@@ -68,3 +72,49 @@ class TestASGIGetter(TestCase):
             expected_val,
             "Should be equal",
         )
+
+
+class TestRequestHeadersGetter(TestCase):
+    def test_matches_asgi_getter(self):
+        carrier = {
+            "headers": [
+                (b"Test-Key", b"val1"),
+                (b"other", b"x"),
+                (b"test-key", b"val2"),
+                (b"non-utf8", b"\xe9"),
+            ]
+        }
+        asgi_getter = ASGIGetter()
+        getter = _RequestHeadersGetter()
+        request_headers = _RequestHeaders(carrier)
+        for key in ("test-key", "TEST-KEY", "other", "non-utf8", "missing"):
+            self.assertEqual(
+                getter.get(request_headers, key),
+                asgi_getter.get(carrier, key),
+                key,
+            )
+        self.assertEqual(
+            getter.get(request_headers, "test-key"), ["val1", "val2"]
+        )
+        self.assertEqual(
+            getter.keys(request_headers), asgi_getter.keys(carrier)
+        )
+
+    def test_empty(self):
+        getter = _RequestHeadersGetter()
+        for carrier in ({}, {"headers": []}, {"headers": None}):
+            request_headers = _RequestHeaders(carrier)
+            self.assertIsNone(getter.get(request_headers, "test"))
+            self.assertEqual(getter.keys(request_headers), [])
+
+    def test_unrequested_values_not_decoded(self):
+        request_headers = _RequestHeaders(
+            {"headers": [(b"cookie", b"\xe9\\u"), (b"host", b"example.com")]}
+        )
+        self.assertEqual(request_headers.get("host"), ["example.com"])
+        self.assertEqual(request_headers.names, ["cookie", "host"])
+
+    def test_get_returns_new_list(self):
+        request_headers = _RequestHeaders({"headers": [(b"key", b"val")]})
+        request_headers.get("key").append("mutated")
+        self.assertEqual(request_headers.get("key"), ["val"])
