@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-google-genai`: cache MCP `ClientSession` tool definitions per session and list uncached sessions concurrently, instead of awaiting `list_tools()` sequentially on every async `generate_content`/`generate_content_stream` call
