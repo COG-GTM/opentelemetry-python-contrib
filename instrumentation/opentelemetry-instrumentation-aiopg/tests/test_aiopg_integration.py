@@ -604,6 +604,42 @@ class TestAiopgIntegration(TestBase):
             "Test stored procedure",
         )
 
+    def test_pool_proxies_reuse_classes(self):
+        db_integration = AiopgIntegration(self.tracer, "testcomponent")
+        other_integration = AiopgIntegration(self.tracer, "othercomponent")
+        pool = async_call(
+            db_integration.wrapped_pool(mock_create_pool, {}, {})
+        )
+        other_pool = async_call(
+            other_integration.wrapped_pool(mock_create_pool, {}, {})
+        )
+        self.assertIsNot(pool, other_pool)
+        self.assertIs(type(pool), type(other_pool))
+
+        cnx1 = async_call(pool.acquire())
+        cnx2 = async_call(other_pool.acquire())
+        cursor1 = async_call(cnx1.cursor())
+        cursor2 = async_call(cnx2.cursor())
+
+        self.assertIsNot(cnx1, cnx2)
+        self.assertIs(type(cnx1), type(cnx2))
+        self.assertIsNot(cursor1, cursor2)
+        self.assertIs(type(cursor1), type(cursor2))
+        self.assertIs(type(cnx1), type(async_call(pool.acquire())))
+
+        async_call(cursor1.execute("SELECT 1"))
+        async_call(cursor2.executemany("SELECT 2"))
+        spans_list = self.memory_exporter.get_finished_spans()
+        self.assertEqual(len(spans_list), 2)
+        self.assertEqual(
+            [span.attributes[DB_STATEMENT] for span in spans_list],
+            ["SELECT 1", "SELECT 2"],
+        )
+        self.assertEqual(
+            [span.attributes[DB_SYSTEM] for span in spans_list],
+            ["testcomponent", "othercomponent"],
+        )
+
     def test_wrap_connect(self):
         aiopg_mock = AiopgMock()
         with mock.patch("aiopg.connect", aiopg_mock.connect):
