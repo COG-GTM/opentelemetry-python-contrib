@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-urllib3`: read `urlopen` arguments directly instead of calling `inspect.Signature.bind` on every request, roughly halving per-request instrumentation overhead
