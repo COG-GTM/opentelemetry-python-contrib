@@ -1,6 +1,8 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import asyncio
 import gc
 import unittest
@@ -20,7 +22,10 @@ from opentelemetry.instrumentation.google_genai.generate_content import (
     GEN_AI_TOOL_DEFINITIONS,
     _GenerateContentInstrumentationHelper,
 )
-from opentelemetry.util.genai.types import FunctionToolDefinition
+from opentelemetry.util.genai.types import (
+    FunctionToolDefinition,
+    ToolDefinition,
+)
 
 from .base import TestCase
 from .nonstreaming_base import _is_mcp_imported, _mock_mcp_client_session
@@ -39,14 +44,23 @@ class _FakeMcpTool:
 
 
 class _FakeMcpSession:
-    def __init__(self, *tool_names: str, started=None, release=None):
-        self._tool_names = tool_names
-        self._started = started
-        self._release = release
-        self.list_tools_calls = 0
+    def __init__(
+        self,
+        *tool_names: str,
+        started: list[_FakeMcpSession] | None = None,
+        release: asyncio.Event | None = None,
+    ) -> None:
+        self._tool_names: tuple[str, ...] = tool_names
+        self._started: list[_FakeMcpSession] | None = started
+        self._release: asyncio.Event | None = release
+        self.list_tools_calls: int = 0
+        self.fail_next_listing: bool = False
 
-    async def list_tools(self):
+    async def list_tools(self) -> SimpleNamespace:
         self.list_tools_calls += 1
+        if self.fail_next_listing:
+            self.fail_next_listing = False
+            raise RuntimeError("list_tools failed")
         if self._started is not None:
             self._started.append(self)
         if self._release is not None:
@@ -161,6 +175,44 @@ class TestMcpSessionToolDefinitions(unittest.TestCase):
                 _function_tool("second"),
             ],
         )
+
+    def test_overlapping_calls_share_one_listing_per_session(self):
+        async def run() -> list[list[ToolDefinition]]:
+            started: list[_FakeMcpSession] = []
+            release = asyncio.Event()
+            session = _FakeMcpSession(
+                "search", started=started, release=release
+            )
+            tasks = [
+                asyncio.ensure_future(
+                    self._helper()._maybe_get_tool_definitions_async(tools)
+                )
+                for tools in ([session], [session, session], [session])
+            ]
+            for _ in range(10):
+                await asyncio.sleep(0)
+            self.assertEqual(started, [session])
+            release.set()
+            results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
+            self.assertEqual(session.list_tools_calls, 1)
+            return results
+
+        expected = [_function_tool("search")]
+        self.assertEqual(
+            asyncio.run(run()), [expected, expected * 2, expected]
+        )
+
+    def test_failed_listing_is_not_cached(self):
+        session = _FakeMcpSession("search")
+        session.fail_next_listing = True
+
+        with self.assertRaises(RuntimeError):
+            self._get_tool_definitions([session])
+
+        self.assertEqual(
+            self._get_tool_definitions([session]), [_function_tool("search")]
+        )
+        self.assertEqual(session.list_tools_calls, 2)
 
     def test_returned_definitions_do_not_alias_cache(self):
         session = _FakeMcpSession("search")

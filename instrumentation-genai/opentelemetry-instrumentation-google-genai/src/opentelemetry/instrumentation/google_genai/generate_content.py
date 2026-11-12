@@ -324,6 +324,19 @@ def _to_tool_definition(tool: ToolUnionDict) -> list[ToolDefinition]:
 _mcp_session_tool_definitions: weakref.WeakKeyDictionary[
     Any, list[ToolDefinition]
 ] = weakref.WeakKeyDictionary()
+# In-flight listings, shared by overlapping calls that use the same session.
+_mcp_session_pending_listings: weakref.WeakKeyDictionary[
+    Any, asyncio.Future[list[ToolDefinition]]
+] = weakref.WeakKeyDictionary()
+
+
+async def _list_mcp_session_tool_definitions(
+    session: McpClientSession,
+) -> list[ToolDefinition]:
+    result = await session.list_tools()
+    definitions = [_model_dump_to_tool_definition(t) for t in result.tools]
+    _mcp_session_tool_definitions[session] = definitions
+    return definitions
 
 
 async def _mcp_session_to_tool_definitions(
@@ -331,9 +344,23 @@ async def _mcp_session_to_tool_definitions(
 ) -> list[ToolDefinition]:
     definitions = _mcp_session_tool_definitions.get(session)
     if definitions is None:
-        result = await session.list_tools()
-        definitions = [_model_dump_to_tool_definition(t) for t in result.tools]
-        _mcp_session_tool_definitions[session] = definitions
+        pending = _mcp_session_pending_listings.get(session)
+        if pending is None:
+            pending = asyncio.ensure_future(
+                _list_mcp_session_tool_definitions(session)
+            )
+            _mcp_session_pending_listings[session] = pending
+
+            def _on_listing_done(
+                future: asyncio.Future[list[ToolDefinition]],
+            ) -> None:
+                _mcp_session_pending_listings.pop(session, None)
+                if not future.cancelled():
+                    # Mark the exception as retrieved if every waiter was cancelled.
+                    future.exception()
+
+            pending.add_done_callback(_on_listing_done)
+        definitions = await asyncio.shield(pending)
     return copy.deepcopy(definitions)
 
 
