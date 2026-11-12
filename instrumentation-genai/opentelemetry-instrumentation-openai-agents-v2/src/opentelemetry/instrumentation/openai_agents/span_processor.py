@@ -1424,8 +1424,7 @@ class GenAISemanticProcessor(TracingProcessor):
         if token := self._tokens.pop(span.span_id, None):
             detach(token)
 
-        otel_span = self._otel_spans.pop(span.span_id, None)
-        if self._needs_content(span, otel_span):
+        if self._needs_content(span, self._otel_spans.get(span.span_id)):
             payload = self._build_content_payload(span)
             self._update_agent_aggregate(span, payload)
         else:
@@ -1436,7 +1435,7 @@ class GenAISemanticProcessor(TracingProcessor):
             else None
         )
 
-        if not otel_span:
+        if not (otel_span := self._otel_spans.pop(span.span_id, None)):
             # Log attributes even without OTel span
             try:
                 attributes = dict(
