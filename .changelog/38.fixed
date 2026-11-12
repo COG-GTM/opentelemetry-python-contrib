@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-vertexai`: skip building message content attributes when content capture is disabled
