@@ -5,6 +5,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 from threading import Lock
 
 # pylint: disable=no-name-in-module
@@ -33,7 +34,7 @@ class _RateLimiter:  # pyright: ignore[reportUnusedClass]
         if self._quota == 0:
             return False
 
-        cost_scaled = round(cost * _MICROS_PER_SECOND)
+        cost_scaled = math.ceil(cost * _MICROS_PER_SECOND)
         wallet_ceiling = self._now()
 
         with self.__lock:

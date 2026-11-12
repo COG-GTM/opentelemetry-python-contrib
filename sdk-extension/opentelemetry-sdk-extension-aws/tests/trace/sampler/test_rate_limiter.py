@@ -79,3 +79,11 @@ class TestRateLimiter(TestCase):
         self.assertTrue(rate_limiter.try_spend(2.5))
         self.assertTrue(rate_limiter.try_spend(1.5))
         self.assertFalse(rate_limiter.try_spend(0.25))
+
+    def test_try_spend_tiny_cost_is_not_free(self):
+        clock = MockClock(datetime.datetime.fromtimestamp(1707551387.0))
+        rate_limiter = _RateLimiter(1, 1, clock)
+
+        clock.add_time(0.000003)
+        spent = sum(1 for _ in range(100) if rate_limiter.try_spend(1e-9))
+        self.assertEqual(spent, 3)
