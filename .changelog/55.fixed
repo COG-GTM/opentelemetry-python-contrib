@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-psycopg`: render `psycopg.sql.Composable` statements once per execute and read only the first token for the operation name; comment-only Composable statements no longer raise `IndexError`
