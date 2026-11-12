@@ -142,9 +142,14 @@ class TestCaptureCustomHeaders(unittest.TestCase):
         captured_headers = ["user-agent", "authorization"]
         sensitive_headers = ["authorization"]
 
-        with patch.object(
-            http_util, "re_compile", wraps=http_util.re_compile
-        ) as re_compile:
+        with (
+            patch.object(
+                http_util, "re_compile", wraps=http_util.re_compile
+            ) as re_compile,
+            patch.object(
+                http_util, "SanitizeValue", wraps=http_util.SanitizeValue
+            ) as sanitize_value,
+        ):
             results = [
                 get_custom_header_attributes(
                     headers,
@@ -156,6 +161,7 @@ class TestCaptureCustomHeaders(unittest.TestCase):
             ]
 
         self.assertEqual(re_compile.call_count, 2)
+        self.assertEqual(sanitize_value.call_count, 1)
         for attributes in results:
             self.assertEqual(
                 attributes,
