@@ -187,6 +187,20 @@ class TestTortoiseORMInstrumentor(TestBase):
             insert_span.attributes["db.statement.parameters"],
         )
 
+    def test_span_name_is_first_token_of_multiline_query(self):
+        query = "\n  SELECT\n    1 AS a,\n    2 AS b\n"
+
+        async def run():
+            await self._init_tortoise()
+            await Tortoise.get_connection("default").execute_query(query)
+
+        self._async_call(run())
+        spans = self.memory_exporter.get_finished_spans()
+        span = next(
+            s for s in spans if s.attributes.get(DB_STATEMENT) == query
+        )
+        self.assertEqual(span.name, "SELECT")
+
     def test_uninstrument(self):
         TortoiseORMInstrumentor().uninstrument()
 
