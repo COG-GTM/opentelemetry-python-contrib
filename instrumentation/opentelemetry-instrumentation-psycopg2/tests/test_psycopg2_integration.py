@@ -5,6 +5,7 @@ import types
 from unittest import mock
 
 import psycopg2
+import psycopg2.sql
 
 import opentelemetry.instrumentation.psycopg2
 from opentelemetry import trace
@@ -129,6 +130,32 @@ class TestPostgresqlIntegration(TestBase):
         self.assertEqual(spans_list[3].name, "query")
         self.assertEqual(spans_list[4].name, "query")
         self.assertEqual(spans_list[5].name, "query")
+
+    def test_span_name_first_token_of_long_statement(self):
+        Psycopg2Instrumentor().instrument()
+
+        cnx = psycopg2.connect(database="test")
+
+        cursor = cnx.cursor()
+
+        values = ", ".join(f"({idx}, 'value {idx}')" for idx in range(1000))
+        cursor.execute(f"\n\t  INSERT INTO test (id, val) VALUES {values}")
+        cursor.execute(
+            f"/* leading comment */\nINSERT INTO test VALUES {values}"
+        )
+        cursor.execute(
+            psycopg2.sql.SQL(" ").join(
+                [
+                    psycopg2.sql.SQL("/* leading comment */ UPDATE"),
+                    psycopg2.sql.SQL("test SET val = 1"),
+                ]
+            )
+        )
+        spans_list = self.memory_exporter.get_finished_spans()
+        self.assertEqual(len(spans_list), 3)
+        self.assertEqual(spans_list[0].name, "INSERT")
+        self.assertEqual(spans_list[1].name, "INSERT")
+        self.assertEqual(spans_list[2].name, "UPDATE")
 
     # pylint: disable=unused-argument
     def test_not_recording(self):
