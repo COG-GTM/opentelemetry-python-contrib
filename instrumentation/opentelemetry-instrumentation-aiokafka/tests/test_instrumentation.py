@@ -380,7 +380,9 @@ class TestAIOKafkaInstrumentation(TestBase, IsolatedAsyncioTestCase):
         span_list = self.memory_exporter.get_finished_spans()
         self._compare_spans(span_list, expected_spans)
 
-    async def test_getmany_serializes_bootstrap_servers_once(self) -> None:
+    async def test_getmany_serializes_bootstrap_servers_once_per_client(
+        self,
+    ) -> None:
         consumer = await self.consumer_factory(
             bootstrap_servers=["host1:9092", "host2:9092"]
         )
@@ -390,6 +392,7 @@ class TestAIOKafkaInstrumentation(TestBase, IsolatedAsyncioTestCase):
         )
         fetched_records_mock.side_effect = [
             self.consumer_batch_factory((), ()),
+            self.consumer_batch_factory((), ()),
         ]
         self.memory_exporter.clear()
 
@@ -398,10 +401,11 @@ class TestAIOKafkaInstrumentation(TestBase, IsolatedAsyncioTestCase):
             wraps=json.dumps,
         ) as dumps_mock:
             await consumer.getmany()
+            await consumer.getmany()
 
         dumps_mock.assert_called_once_with(["host1:9092", "host2:9092"])
         span_list = self.memory_exporter.get_finished_spans()
-        self.assertEqual(len(span_list), 5)
+        self.assertEqual(len(span_list), 10)
         for span in span_list:
             self.assertEqual(
                 span.attributes[server_attributes.SERVER_ADDRESS],

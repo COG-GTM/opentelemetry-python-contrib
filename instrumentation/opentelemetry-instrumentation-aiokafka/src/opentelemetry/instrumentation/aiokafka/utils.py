@@ -20,6 +20,7 @@ from typing import (
     Tuple,
     cast,
 )
+from weakref import WeakKeyDictionary
 
 import aiokafka
 
@@ -84,6 +85,19 @@ def _extract_bootstrap_servers(
     client: aiokafka.AIOKafkaClient,
 ) -> str | list[str]:
     return client._bootstrap_servers
+
+
+_server_address_cache: WeakKeyDictionary[aiokafka.AIOKafkaClient, str] = (
+    WeakKeyDictionary()
+)
+
+
+def _get_server_address(client: aiokafka.AIOKafkaClient) -> str:
+    server_address = _server_address_cache.get(client)
+    if server_address is None:
+        server_address = json.dumps(_extract_bootstrap_servers(client))
+        _server_address_cache[client] = server_address
+    return server_address
 
 
 def _extract_client_id(client: aiokafka.AIOKafkaClient) -> str:
@@ -431,9 +445,7 @@ def _wrap_send(  # type: ignore[reportUnusedFunction]
             kwargs["headers"] = headers
 
         topic = _extract_send_topic(args, kwargs)
-        server_address = json.dumps(
-            _extract_bootstrap_servers(instance.client)
-        )
+        server_address = _get_server_address(instance.client)
         client_id = _extract_client_id(instance.client)
         key = _deserialize_key(_extract_send_key(args, kwargs))
         partition = await _extract_send_partition(instance, args, kwargs)
@@ -517,9 +529,7 @@ def _wrap_getone(  # type: ignore[reportUnusedFunction]
         record = await func(*args, **kwargs)
 
         if record:
-            server_address = json.dumps(
-                _extract_bootstrap_servers(instance._client)
-            )
+            server_address = _get_server_address(instance._client)
             client_id = _extract_client_id(instance._client)
             consumer_group = _extract_consumer_group(instance)
 
@@ -564,9 +574,7 @@ def _wrap_getmany(  # type: ignore[reportUnusedFunction]
         records = await func(*args, **kwargs)
 
         if records:
-            server_address = json.dumps(
-                _extract_bootstrap_servers(instance._client)
-            )
+            server_address = _get_server_address(instance._client)
             client_id = _extract_client_id(instance._client)
             consumer_group = _extract_consumer_group(instance)
 
