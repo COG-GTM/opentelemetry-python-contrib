@@ -327,6 +327,36 @@ class TestDBApiIntegration(TestBase):
         self.assertEqual(spans_list[4].name, "query")
         self.assertEqual(spans_list[5].name, "query")
 
+    def test_span_name_from_statement_prefix(self):
+        db_integration = dbapi.DatabaseApiIntegration(
+            "instrumenting_module_test_name", "testcomponent", {}
+        )
+        mock_connection = db_integration.wrapped_connection(
+            mock_connect, {}, {}
+        )
+        cursor = mock_connection.cursor()
+        rows = ", ".join(f"({idx}, 'name{idx}')" for idx in range(10000))
+        cursor.execute(f"/* app='etl' */ INSERT INTO t (a, b) VALUES {rows}")
+        cursor.execute("/*no-space*/SELECT 1")
+        cursor.execute("\n\t  SELECT 1")
+        cursor.execute("/* first */ /* second */ SELECT 1")
+        cursor.execute("  /* not leading */ SELECT 1")
+        cursor.execute("/* comment only */  ")
+        cursor.execute("   ")
+        spans_list = self.memory_exporter.get_finished_spans()
+        self.assertEqual(
+            [span.name for span in spans_list],
+            [
+                "INSERT",
+                "SELECT",
+                "SELECT",
+                "/*",
+                "/*",
+                "testcomponent",
+                "testcomponent",
+            ],
+        )
+
     def test_span_succeeded_with_capture_of_statement_parameters(self):
         connection_props = _get_default_connection_props()
         connection_attributes = _get_default_connection_attributes()

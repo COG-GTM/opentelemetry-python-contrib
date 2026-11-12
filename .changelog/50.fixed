@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-dbapi`: read only the statement prefix when deriving the operation name, so per-query overhead no longer grows with statement size
