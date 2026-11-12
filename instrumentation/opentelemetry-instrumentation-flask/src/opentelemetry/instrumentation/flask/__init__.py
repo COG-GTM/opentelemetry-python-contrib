@@ -284,6 +284,7 @@ from opentelemetry.semconv.metrics.http_metrics import (
 )
 from opentelemetry.util._importlib_metadata import version
 from opentelemetry.util.http import (
+    ExcludeList,
     get_excluded_urls,
     parse_excluded_urls,
     sanitize_method,
@@ -332,7 +333,7 @@ def get_default_span_name():
     return span_name
 
 
-def _is_url_excluded(excluded_urls) -> bool:
+def _is_url_excluded(excluded_urls: ExcludeList | None) -> bool:
     """Returns whether the current request URL is excluded, evaluating the
     exclusion regex at most once per request and ``excluded_urls`` object."""
     if not excluded_urls:
