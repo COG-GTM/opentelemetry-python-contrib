@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-botocore`: join Bedrock stream text and tool-input deltas once per content block instead of quadratic string concatenation, and skip accumulating them when message content capture is disabled

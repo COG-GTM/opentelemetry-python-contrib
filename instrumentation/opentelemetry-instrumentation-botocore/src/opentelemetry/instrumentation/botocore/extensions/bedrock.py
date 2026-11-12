@@ -644,6 +644,7 @@ class _BedrockRuntimeExtension(_AwsSdkExtension):
                     result["stream"],
                     stream_done_callback,
                     stream_error_callback,
+                    capture_content=capture_content,
                 )
                 return
         elif self._call_context.operation == "Converse":
@@ -686,6 +687,7 @@ class _BedrockRuntimeExtension(_AwsSdkExtension):
                     invoke_model_stream_done_callback,
                     invoke_model_stream_error_callback,
                     model_id,
+                    capture_content=capture_content,
                 )
                 return
 

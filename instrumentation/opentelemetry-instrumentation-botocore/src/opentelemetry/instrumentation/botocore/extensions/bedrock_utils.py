@@ -39,17 +39,23 @@ class ConverseStreamWrapper(BaseObjectProxy):
         stream: EventStream,
         stream_done_callback: _StreamDoneCallableT,
         stream_error_callback: _StreamErrorCallableT,
+        capture_content: bool | None = None,
     ):
         super().__init__(stream)
 
         self._stream_done_callback = stream_done_callback
         self._stream_error_callback = stream_error_callback
+        if capture_content is None:
+            capture_content = genai_capture_message_content()
+        self._capture_content = capture_content
         # accumulating things in the same shape of non-streaming version
         # {"usage": {"inputTokens": 0, "outputTokens": 0}, "stopReason": "finish", "output": {"message": {"role": "", "content": [{"text": ""}]}
         self._response = {}
         self._message = None
         self._content_block = {}
-        self._tool_json_input_buf = ""
+        # deltas are joined once per content block to avoid quadratic concatenation
+        self._text_parts: list[str] = []
+        self._tool_json_input_parts: list[str] = []
         self._record_message = False
         self._ended = False
 
@@ -82,33 +88,32 @@ class ConverseStreamWrapper(BaseObjectProxy):
             # {'contentBlockDelta': {'delta': {'text': "Hello"}, 'contentBlockIndex': 0}}
             # {'contentBlockDelta': {'delta': {'toolUse': {'input': '{"location":"Seattle"}'}}, 'contentBlockIndex': 1}}
             # {'contentBlockDelta': {'delta': {'toolUse': {'input': 'a", "Yok'}}, 'contentBlockIndex': 1}}
-            if self._record_message:
+            if self._record_message and self._capture_content:
                 delta = event["contentBlockDelta"].get("delta", {})
                 if "text" in delta:
-                    self._content_block.setdefault("text", "")
-                    self._content_block["text"] += delta["text"]
+                    self._text_parts.append(delta["text"])
                 elif "toolUse" in delta:
                     if (
                         input_buf := delta["toolUse"].get("input")
                     ) is not None:
-                        self._tool_json_input_buf += input_buf
+                        self._tool_json_input_parts.append(input_buf)
             return
 
         if "contentBlockStop" in event:
             # {'contentBlockStop': {'contentBlockIndex': 0}}
             if self._record_message:
-                if self._tool_json_input_buf:
+                self._flush_text_parts()
+                if tool_json_input := self._pop_tool_json_input():
                     try:
                         self._content_block["toolUse"]["input"] = json.loads(
-                            self._tool_json_input_buf
+                            tool_json_input
                         )
                     except json.JSONDecodeError:
                         self._content_block["toolUse"]["input"] = (
-                            self._tool_json_input_buf
+                            tool_json_input
                         )
                 self._message["content"].append(self._content_block)
                 self._content_block = {}
-                self._tool_json_input_buf = ""
             return
 
         if "messageStop" in event:
@@ -141,6 +146,18 @@ class ConverseStreamWrapper(BaseObjectProxy):
         # Treat the stream as done to ensure the span end.
         self._complete_stream(self._response)
 
+    def _flush_text_parts(self):
+        if self._text_parts:
+            self._content_block["text"] = self._content_block.get(
+                "text", ""
+            ) + "".join(self._text_parts)
+            self._text_parts = []
+
+    def _pop_tool_json_input(self) -> str:
+        tool_json_input = "".join(self._tool_json_input_parts)
+        self._tool_json_input_parts = []
+        return tool_json_input
+
     def _complete_stream(self, response):
         self._stream_done_callback(response, self._ended)
         self._ended = True
@@ -160,19 +177,25 @@ class InvokeModelWithResponseStreamWrapper(BaseObjectProxy):
         stream_done_callback: _StreamDoneCallableT,
         stream_error_callback: _StreamErrorCallableT,
         model_id: str,
+        capture_content: bool | None = None,
     ):
         super().__init__(stream)
 
         self._stream_done_callback = stream_done_callback
         self._stream_error_callback = stream_error_callback
         self._model_id = model_id
+        if capture_content is None:
+            capture_content = genai_capture_message_content()
+        self._capture_content = capture_content
 
         # accumulating things in the same shape of the Converse API
         # {"usage": {"inputTokens": 0, "outputTokens": 0}, "stopReason": "finish", "output": {"message": {"role": "", "content": [{"text": ""}]}
         self._response = {}
         self._message = None
         self._content_block = {}
-        self._tool_json_input_buf = ""
+        # deltas are joined once per content block to avoid quadratic concatenation
+        self._text_parts: list[str] = []
+        self._tool_json_input_parts: list[str] = []
         self._record_message = False
         self._ended = False
 
@@ -180,6 +203,18 @@ class InvokeModelWithResponseStreamWrapper(BaseObjectProxy):
         self.__wrapped__.close()  # pylint: disable=no-member
         # Treat the stream as done to ensure the span end.
         self._stream_done_callback(self._response, self._ended)
+
+    def _flush_text_parts(self):
+        if self._text_parts:
+            self._content_block["text"] = self._content_block.get(
+                "text", ""
+            ) + "".join(self._text_parts)
+            self._text_parts = []
+
+    def _pop_tool_json_input(self) -> str:
+        tool_json_input = "".join(self._tool_json_input_parts)
+        self._tool_json_input_parts = []
+        return tool_json_input
 
     def _complete_stream(self, response):
         self._stream_done_callback(response, self._ended)
@@ -252,6 +287,7 @@ class InvokeModelWithResponseStreamWrapper(BaseObjectProxy):
         if "contentBlockStart" in chunk:
             # {'contentBlockStart': {'start': {'toolUse': {'toolUseId': 'id', 'name': 'name'}}, 'contentBlockIndex': 31}}
             if self._record_message:
+                self._flush_text_parts()
                 self._message["content"].append(self._content_block)
 
                 start = chunk["contentBlockStart"].get("start", {})
@@ -264,11 +300,10 @@ class InvokeModelWithResponseStreamWrapper(BaseObjectProxy):
         if "contentBlockDelta" in chunk:
             # {'contentBlockDelta': {'delta': {'text': "Hello"}, 'contentBlockIndex': 0}}
             # {'contentBlockDelta': {'delta': {'toolUse': {'input': '{"location":"San Francisco"}'}}, 'contentBlockIndex': 31}}
-            if self._record_message:
+            if self._record_message and self._capture_content:
                 delta = chunk["contentBlockDelta"].get("delta", {})
                 if "text" in delta:
-                    self._content_block.setdefault("text", "")
-                    self._content_block["text"] += delta["text"]
+                    self._text_parts.append(delta["text"])
                 elif "toolUse" in delta:
                     self._content_block.setdefault("toolUse", {})
                     self._content_block["toolUse"]["input"] = json.loads(
@@ -281,6 +316,7 @@ class InvokeModelWithResponseStreamWrapper(BaseObjectProxy):
             if self._record_message:
                 # create a new content block only for tools
                 if "toolUse" in self._content_block:
+                    self._flush_text_parts()
                     self._message["content"].append(self._content_block)
                     self._content_block = {}
             return
@@ -291,6 +327,7 @@ class InvokeModelWithResponseStreamWrapper(BaseObjectProxy):
                 self._response["stopReason"] = stop_reason
 
             if self._record_message:
+                self._flush_text_parts()
                 self._message["content"].append(self._content_block)
                 self._content_block = {}
                 self._response["output"] = {"message": self._message}
@@ -341,26 +378,26 @@ class InvokeModelWithResponseStreamWrapper(BaseObjectProxy):
         if message_type == "content_block_delta":
             # {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 'Here'}}
             # {'type': 'content_block_delta', 'index': 1, 'delta': {'type': 'input_json_delta', 'partial_json': ''}}
-            if self._record_message:
+            if self._record_message and self._capture_content:
                 delta = chunk.get("delta", {})
                 if delta.get("type") == "text_delta":
-                    self._content_block["text"] += delta.get("text", "")
+                    self._text_parts.append(delta.get("text", ""))
                 elif delta.get("type") == "input_json_delta":
-                    self._tool_json_input_buf += delta.get("partial_json", "")
+                    self._tool_json_input_parts.append(
+                        delta.get("partial_json", "")
+                    )
             return
 
         if message_type == "content_block_stop":
             # {'type': 'content_block_stop', 'index': 0}
-            if self._tool_json_input_buf:
+            self._flush_text_parts()
+            if tool_json_input := self._pop_tool_json_input():
                 try:
-                    self._content_block["input"] = json.loads(
-                        self._tool_json_input_buf
-                    )
+                    self._content_block["input"] = json.loads(tool_json_input)
                 except json.JSONDecodeError:
-                    self._content_block["input"] = self._tool_json_input_buf
+                    self._content_block["input"] = tool_json_input
             self._message["content"].append(self._content_block)
             self._content_block = {}
-            self._tool_json_input_buf = ""
             return
 
         if message_type == "message_delta":

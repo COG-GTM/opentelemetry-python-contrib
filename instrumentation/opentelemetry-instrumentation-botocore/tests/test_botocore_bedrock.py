@@ -14,7 +14,11 @@ import pytest
 from botocore.eventstream import EventStream, EventStreamError
 from botocore.response import StreamingBody
 
+from opentelemetry.instrumentation.botocore.environment_variables import (
+    OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
+)
 from opentelemetry.instrumentation.botocore.extensions.bedrock_utils import (
+    ConverseStreamWrapper,
     InvokeModelWithResponseStreamWrapper,
     _Choice,
 )
@@ -3065,6 +3069,204 @@ def test_anthropic_claude_chunk_tool_use_input_handling(
         assert isinstance(tool_block["input"], dict)
     else:
         assert "input" not in tool_block
+
+
+_STREAM_TEXT_DELTAS = ["Hel", "lo", ", ", "wor", "ld"]
+_STREAM_TOOL_JSON_DELTAS = ['{"loc', 'ation": "Sea', 'ttle"}']
+
+
+def _new_stream_wrapper(wrapper_cls, capture_content, **kwargs):
+    done = []
+    wrapper = wrapper_cls(
+        stream=mock.MagicMock(),
+        stream_done_callback=lambda response, ended: done.append(response),
+        stream_error_callback=lambda exc, ended: None,
+        capture_content=capture_content,
+        **kwargs,
+    )
+    return wrapper, done
+
+
+def _assert_stream_tool_call(response, capture_content):
+    choice = _Choice.from_converse(response, capture_content)
+    function = {"name": "get_current_weather"}
+    if capture_content:
+        function["arguments"] = {"location": "Seattle"}
+    assert choice.message["tool_calls"] == [
+        {"type": "function", "id": "tool-id", "function": function}
+    ]
+
+
+@pytest.mark.parametrize("capture_content", [True, False])
+def test_converse_stream_wrapper_accumulates_deltas(capture_content):
+    wrapper, done = _new_stream_wrapper(ConverseStreamWrapper, capture_content)
+    events = [{"messageStart": {"role": "assistant"}}]
+    events += [
+        {
+            "contentBlockDelta": {
+                "delta": {"text": text},
+                "contentBlockIndex": 0,
+            }
+        }
+        for text in _STREAM_TEXT_DELTAS
+    ]
+    events.append({"contentBlockStop": {"contentBlockIndex": 0}})
+    events.append(
+        {
+            "contentBlockStart": {
+                "start": {
+                    "toolUse": {
+                        "toolUseId": "tool-id",
+                        "name": "get_current_weather",
+                    }
+                },
+                "contentBlockIndex": 1,
+            }
+        }
+    )
+    events += [
+        {
+            "contentBlockDelta": {
+                "delta": {"toolUse": {"input": json_part}},
+                "contentBlockIndex": 1,
+            }
+        }
+        for json_part in _STREAM_TOOL_JSON_DELTAS
+    ]
+    events.append({"contentBlockStop": {"contentBlockIndex": 1}})
+    events.append({"messageStop": {"stopReason": "tool_use"}})
+    events.append(
+        {"metadata": {"usage": {"inputTokens": 1, "outputTokens": 2}}}
+    )
+    for event in events:
+        wrapper._process_event(event)
+
+    (response,) = done
+    text_block, tool_block = response["output"]["message"]["content"]
+    if capture_content:
+        assert text_block == {"text": "Hello, world"}
+        assert tool_block["toolUse"]["input"] == {"location": "Seattle"}
+    else:
+        assert text_block == {}
+        assert "input" not in tool_block["toolUse"]
+    _assert_stream_tool_call(response, capture_content)
+
+
+@pytest.mark.parametrize("capture_content", [True, False])
+def test_invoke_model_stream_wrapper_amazon_nova_accumulates_text(
+    capture_content,
+):
+    wrapper, done = _new_stream_wrapper(
+        InvokeModelWithResponseStreamWrapper,
+        capture_content,
+        model_id="amazon.nova-micro-v1:0",
+    )
+    chunks = [{"messageStart": {"role": "assistant"}}]
+    chunks += [
+        {
+            "contentBlockDelta": {
+                "delta": {"text": text},
+                "contentBlockIndex": 0,
+            }
+        }
+        for text in _STREAM_TEXT_DELTAS
+    ]
+    chunks.append({"contentBlockStop": {"contentBlockIndex": 0}})
+    chunks.append({"messageStop": {"stopReason": "end_turn"}})
+    chunks.append(
+        {"metadata": {"usage": {"inputTokens": 1, "outputTokens": 2}}}
+    )
+    for chunk in chunks:
+        wrapper._process_amazon_nova_chunk(chunk)
+
+    (response,) = done
+    expected_block = {"text": "Hello, world"} if capture_content else {}
+    assert response["output"]["message"]["content"] == [expected_block]
+
+
+@pytest.mark.parametrize("capture_content", [True, False])
+def test_invoke_model_stream_wrapper_anthropic_claude_accumulates_deltas(
+    capture_content,
+):
+    wrapper, done = _new_stream_wrapper(
+        InvokeModelWithResponseStreamWrapper,
+        capture_content,
+        model_id="anthropic.claude-3-5-sonnet-20240620-v1:0",
+    )
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {"role": "assistant", "content": []},
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        },
+    ]
+    chunks += [
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": text},
+        }
+        for text in _STREAM_TEXT_DELTAS
+    ]
+    chunks.append({"type": "content_block_stop", "index": 0})
+    chunks.append(
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "tool_use",
+                "id": "tool-id",
+                "name": "get_current_weather",
+                "input": {},
+            },
+        }
+    )
+    chunks += [
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "input_json_delta", "partial_json": json_part},
+        }
+        for json_part in _STREAM_TOOL_JSON_DELTAS
+    ]
+    chunks.append({"type": "content_block_stop", "index": 1})
+    chunks.append(
+        {"type": "message_delta", "delta": {"stop_reason": "tool_use"}}
+    )
+    chunks.append({"type": "message_stop"})
+    for chunk in chunks:
+        wrapper._process_anthropic_claude_chunk(chunk)
+
+    (response,) = done
+    text_block, tool_block = response["output"]["message"]["content"]
+    if capture_content:
+        assert text_block["text"] == "Hello, world"
+        assert tool_block["input"] == {"location": "Seattle"}
+    else:
+        assert text_block["text"] == ""
+        assert tool_block["input"] == {}
+    _assert_stream_tool_call(response, capture_content)
+
+
+@pytest.mark.parametrize(
+    "env_value,expected", [("true", True), ("false", False)]
+)
+def test_stream_wrappers_default_capture_content_from_env(
+    monkeypatch, env_value, expected
+):
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, env_value
+    )
+    converse = ConverseStreamWrapper(mock.MagicMock(), None, None)
+    invoke = InvokeModelWithResponseStreamWrapper(
+        mock.MagicMock(), None, None, "amazon.nova-micro-v1:0"
+    )
+    assert converse._capture_content is expected
+    assert invoke._capture_content is expected
 
 
 def test_converse_stream_with_missing_output_in_response():
