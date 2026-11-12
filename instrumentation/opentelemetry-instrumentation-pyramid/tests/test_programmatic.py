@@ -4,6 +4,7 @@
 from unittest.mock import Mock, patch
 
 from pyramid.config import Configurator
+from werkzeug.test import Client, TestResponse
 
 from opentelemetry import trace
 from opentelemetry.instrumentation._semconv import (
@@ -135,7 +136,8 @@ class TestProgrammatic(InstrumentationTest, WsgiTestBase):
         mock_span = Mock()
         mock_span.is_recording.return_value = False
         mock_tracer.start_span.return_value = mock_span
-        with patch("opentelemetry.trace.get_tracer"):
+        with patch("opentelemetry.trace.get_tracer", return_value=mock_tracer):
+            self.client = Client(self.config.make_wsgi_app(), TestResponse)
             self.client.get("/hello/123")
             span_list = self.memory_exporter.get_finished_spans()
             self.assertEqual(len(span_list), 0)
@@ -143,6 +145,18 @@ class TestProgrammatic(InstrumentationTest, WsgiTestBase):
             self.assertTrue(mock_span.is_recording.called)
             self.assertFalse(mock_span.set_attribute.called)
             self.assertFalse(mock_span.set_status.called)
+
+    def test_tracer_acquired_once_per_app(self):
+        with patch(
+            "opentelemetry.trace.get_tracer", wraps=trace.get_tracer
+        ) as get_tracer:
+            self.client = Client(self.config.make_wsgi_app(), TestResponse)
+            self.assertEqual(get_tracer.call_count, 1)
+            self.client.get("/hello/123")
+            self.client.get("/hello/456")
+            self.client.get("/hello/500")
+            self.assertEqual(get_tracer.call_count, 1)
+        self.assertEqual(len(self.memory_exporter.get_finished_spans()), 3)
 
     def test_404(self):
         expected_attrs = expected_attributes(
