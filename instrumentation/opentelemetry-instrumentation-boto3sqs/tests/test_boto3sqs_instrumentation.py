@@ -11,6 +11,7 @@ import boto3
 from botocore.awsrequest import AWSResponse
 from wrapt import BoundFunctionWrapper
 
+from opentelemetry import propagate
 from opentelemetry.instrumentation.boto3sqs import (
     Boto3SQSGetter,
     Boto3SQSInstrumentor,
@@ -379,7 +380,7 @@ class TestBoto3SQSInstrumentation(TestBase):
                 MessageAttributeNames=message_attr_names,
             )
 
-        self.assertIn("traceparent", message_attr_names)
+        self.assertEqual([], message_attr_names)
 
         # receive span
         span = self._get_only_span()
@@ -425,6 +426,28 @@ class TestBoto3SQSInstrumentation(TestBase):
             self.assertEqual(attrs["span_id"], link.context.span_id)
 
             self.memory_exporter.clear()
+
+    def test_receive_message_does_not_mutate_attribute_names(self):
+        fields = list(propagate.get_global_textmap().fields)
+        message_attr_names = ["All", fields[0]]
+
+        with mock.patch.object(
+            self._client, "_make_api_call", return_value={"Messages": []}
+        ) as make_api_call:
+            for _ in range(3):
+                self._client.receive_message(
+                    QueueUrl=self._queue_url,
+                    MessageAttributeNames=message_attr_names,
+                )
+
+        self.assertEqual(["All", fields[0]], message_attr_names)
+        self.assertEqual(3, make_api_call.call_count)
+        for call in make_api_call.call_args_list:
+            operation_name, api_params = call.args
+            self.assertEqual("ReceiveMessage", operation_name)
+            self.assertEqual(
+                ["All", *fields], api_params["MessageAttributeNames"]
+            )
 
     def test_uninstrument(self):
         mock_response = {
