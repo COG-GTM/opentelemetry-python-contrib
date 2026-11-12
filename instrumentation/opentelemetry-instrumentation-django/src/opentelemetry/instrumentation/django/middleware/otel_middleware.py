@@ -120,6 +120,7 @@ class _DjangoMiddleware:
         "opentelemetry-instrumentor-django.duration_attr_key"
     )
     _environ_timer_key = "opentelemetry-instrumentor-django.timer_key"
+    _environ_excluded_key = "opentelemetry-instrumentor-django.excluded_key"
     _traced_request_attrs = get_traced_request_attrs("DJANGO")
     _excluded_urls = get_excluded_urls("DJANGO")
     _tracer = None
@@ -141,6 +142,17 @@ class _DjangoMiddleware:
         self.process_request(request)
         response = self.get_response(request)
         return self.process_response(request, response)
+
+    def _is_excluded(self, request) -> bool:
+        if not getattr(self._excluded_urls, "_excluded_urls", True):
+            return False
+        excluded = request.META.get(self._environ_excluded_key)
+        if excluded is None:
+            excluded = self._excluded_urls.url_disabled(
+                request.build_absolute_uri("?")
+            )
+            request.META[self._environ_excluded_key] = excluded
+        return excluded
 
     @staticmethod
     def _get_span_name(request):
@@ -171,7 +183,7 @@ class _DjangoMiddleware:
         # Read more about request.META here:
         # https://docs.djangoproject.com/en/3.0/ref/request-response/#django.http.HttpRequest.META
 
-        if self._excluded_urls.url_disabled(request.build_absolute_uri("?")):
+        if self._is_excluded(request):
             return
 
         is_asgi_request = _is_asgi_request(request)
@@ -282,7 +294,7 @@ class _DjangoMiddleware:
     def process_view(self, request, view_func, *args, **kwargs):
         # Process view is executed before the view function, here we get the
         # route template from request.resolver_match.  It is not set yet in process_request
-        if self._excluded_urls.url_disabled(request.build_absolute_uri("?")):
+        if self._is_excluded(request):
             return
 
         if (
@@ -307,7 +319,7 @@ class _DjangoMiddleware:
                         duration_attrs[HTTP_ROUTE] = route
 
     def process_exception(self, request, exception):
-        if self._excluded_urls.url_disabled(request.build_absolute_uri("?")):
+        if self._is_excluded(request):
             return
 
         if self._environ_activation_key in request.META.keys():
@@ -317,7 +329,9 @@ class _DjangoMiddleware:
     # pylint: disable=too-many-locals
     # pylint: disable=too-many-statements
     def process_response(self, request, response):
-        if self._excluded_urls.url_disabled(request.build_absolute_uri("?")):
+        excluded = self._is_excluded(request)
+        request.META.pop(self._environ_excluded_key, None)
+        if excluded:
             return response
 
         is_asgi_request = _is_asgi_request(request)
