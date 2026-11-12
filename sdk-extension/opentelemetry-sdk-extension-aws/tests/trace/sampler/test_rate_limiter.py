@@ -41,3 +41,41 @@ class TestRateLimiter(TestCase):
             if rate_limiter.try_spend(1):
                 spent += 1
         self.assertEqual(spent, 30)
+
+    def test_try_spend_zero_quota(self):
+        clock = MockClock(datetime.datetime.fromtimestamp(1707551387.0))
+        rate_limiter = _RateLimiter(1, 0, clock)
+
+        clock.add_time(10)
+        self.assertFalse(rate_limiter.try_spend(1))
+
+    def test_try_spend_exact_balance_without_rounding_loss(self):
+        # 1000 / 7 ms per unit is not representable as a float; a full second
+        # must still pay for exactly 7 units.
+        clock = MockClock(datetime.datetime.fromtimestamp(1707551387.0))
+        rate_limiter = _RateLimiter(1, 7, clock)
+
+        clock.add_time(1)
+        spent = sum(1 for _ in range(100) if rate_limiter.try_spend(1))
+        self.assertEqual(spent, 7)
+
+        clock.add_time(3)
+        spent = sum(1 for _ in range(100) if rate_limiter.try_spend(1))
+        self.assertEqual(spent, 7)
+
+    def test_try_spend_balance_capped_at_max_balance(self):
+        clock = MockClock(datetime.datetime.fromtimestamp(1707551387.0))
+        rate_limiter = _RateLimiter(2, 5, clock)
+
+        clock.add_time(60)
+        spent = sum(1 for _ in range(100) if rate_limiter.try_spend(1))
+        self.assertEqual(spent, 10)
+
+    def test_try_spend_fractional_cost(self):
+        clock = MockClock(datetime.datetime.fromtimestamp(1707551387.0))
+        rate_limiter = _RateLimiter(1, 4, clock)
+
+        clock.add_time(1)
+        self.assertTrue(rate_limiter.try_spend(2.5))
+        self.assertTrue(rate_limiter.try_spend(1.5))
+        self.assertFalse(rate_limiter.try_spend(0.25))
