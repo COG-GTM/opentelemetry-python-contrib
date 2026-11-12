@@ -128,7 +128,7 @@ def test_suppress_resource(span_processor):
         nodes.extend(node.children)
 
 
-def _span_children(node: Tree) -> list:
+def _span_children(node: Tree) -> list[Tree]:
     return [
         child
         for child in node.children
@@ -140,11 +140,13 @@ def _span_name(node: Tree) -> str:
     return node.label.plain.split("] ", 1)[1].split(",", 1)[0]
 
 
-def _child_names(node: Tree) -> list:
+def _child_names(node: Tree) -> list[str]:
     return [_span_name(child) for child in _span_children(node)]
 
 
-def test_children_before_parents(tracer_provider):
+def test_children_before_parents(
+    tracer_provider: trace.TracerProvider,
+) -> None:
     tracer = tracer_provider.get_tracer(__name__)
     with tracer.start_as_current_span("root") as root:
         with tracer.start_as_current_span("a") as span_a:
@@ -169,7 +171,9 @@ def test_children_before_parents(tracer_provider):
     assert _child_names(_span_children(node_a)[0]) == ["a1x"]
 
 
-def test_siblings_keep_batch_order(tracer_provider):
+def test_siblings_keep_batch_order(
+    tracer_provider: trace.TracerProvider,
+) -> None:
     tracer = tracer_provider.get_tracer(__name__)
     with tracer.start_as_current_span("parent") as parent:
         siblings = []
@@ -185,7 +189,9 @@ def test_siblings_keep_batch_order(tracer_provider):
     ]
 
 
-def test_roots_keep_batch_order(tracer_provider):
+def test_roots_keep_batch_order(
+    tracer_provider: trace.TracerProvider,
+) -> None:
     tracer = tracer_provider.get_tracer(__name__)
     with tracer.start_as_current_span("parent"):
         orphans = []
@@ -201,7 +207,7 @@ def test_roots_keep_batch_order(tracer_provider):
 
 
 @pytest.mark.timeout(30)
-def test_deep_trace_reversed_batch():
+def test_deep_trace_reversed_batch() -> None:
     tracer = trace.TracerProvider().get_tracer(__name__)
     root = tracer.start_span("root")
     spans = [root]
