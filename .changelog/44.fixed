@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-wsgi`, `opentelemetry-instrumentation-django`: skip response header collection when `OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE` is not set

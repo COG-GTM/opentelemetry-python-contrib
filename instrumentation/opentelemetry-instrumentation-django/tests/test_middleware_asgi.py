@@ -63,6 +63,7 @@ from opentelemetry.util.http import (
     OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE,
     get_excluded_urls,
     get_traced_request_attrs,
+    normalise_response_header_name,
 )
 
 # pylint: disable=import-error
@@ -636,6 +637,18 @@ class TestMiddlewareAsgi(SimpleTestCase, TestBase):
             f"00-{trace_id}-{span_id}-{trace_flags:02x}",
         )
         self.memory_exporter.clear()
+
+    async def test_custom_response_headers_skipped_when_not_configured(self):
+        with patch(
+            "opentelemetry.instrumentation.django.middleware.otel_middleware.asgi_collect_custom_headers_attributes"
+        ) as collect:
+            await self.async_client.get("/traced_custom_header/")
+        for call in collect.call_args_list:
+            self.assertIsNot(call.args[3], normalise_response_header_name)
+        span = self.memory_exporter.get_finished_spans()[0]
+        self.assertEqual(span.kind, SpanKind.SERVER)
+        for key in span.attributes:
+            self.assertFalse(key.startswith("http.response.header."))
 
 
 class TestMiddlewareAsgiWithTracerProvider(SimpleTestCase, TestBase):

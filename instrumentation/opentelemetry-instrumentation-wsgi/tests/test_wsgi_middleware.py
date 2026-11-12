@@ -1253,6 +1253,25 @@ class TestAdditionOfCustomRequestResponseHeaders(WsgiTestBase):
         }
         self.assertSpanHasAttributes(span, expected)
 
+    def test_custom_response_headers_skipped_when_not_configured(self):
+        with mock.patch.object(otel_wsgi, "SanitizeValue") as sanitize:
+            self.assertEqual(
+                otel_wsgi.collect_custom_response_headers_attributes(
+                    [("my-custom-header", "my-custom-value-1")]
+                ),
+                {},
+            )
+        sanitize.assert_not_called()
+
+        app = otel_wsgi.OpenTelemetryMiddleware(
+            wsgi_with_custom_response_headers
+        )
+        response = app(self.environ, self.start_response)
+        self.iterate_response(response)
+        span = self.memory_exporter.get_finished_spans()[0]
+        for key in span.attributes:
+            self.assertFalse(key.startswith("http.response.header."))
+
 
 if __name__ == "__main__":
     unittest.main()
