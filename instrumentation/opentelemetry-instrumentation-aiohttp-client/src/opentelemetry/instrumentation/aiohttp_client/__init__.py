@@ -230,7 +230,7 @@ from opentelemetry.instrumentation.utils import (
     is_http_instrumentation_enabled,
     unwrap,
 )
-from opentelemetry.metrics import MeterProvider, get_meter
+from opentelemetry.metrics import Histogram, MeterProvider, get_meter
 from opentelemetry.propagate import inject
 from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
 from opentelemetry.semconv.metrics import (
@@ -239,12 +239,19 @@ from opentelemetry.semconv.metrics import (
 from opentelemetry.semconv.metrics.http_metrics import (
     HTTP_CLIENT_REQUEST_DURATION,
 )
-from opentelemetry.trace import Span, SpanKind, TracerProvider, get_tracer
+from opentelemetry.trace import (
+    Span,
+    SpanKind,
+    Tracer,
+    TracerProvider,
+    get_tracer,
+)
 from opentelemetry.trace.status import Status, StatusCode
 from opentelemetry.util.http import (
     OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_CLIENT_REQUEST,
     OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_CLIENT_RESPONSE,
     OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS,
+    ExcludeList,
     get_custom_header_attributes,
     get_custom_headers,
     get_excluded_urls,
@@ -322,8 +329,6 @@ def _set_http_status_code_attribute(
     )
 
 
-# pylint: disable=too-many-locals
-# pylint: disable=too-many-statements
 def create_trace_config(
     url_filter: UrlFilterT = None,
     request_hook: RequestHookT = None,
@@ -380,6 +385,29 @@ def create_trace_config(
     # Explicitly specify the type for the `request_hook` and `response_hook` param and rtype to work
     # around this issue.
 
+    tracer, duration_histogram_old, duration_histogram_new = _create_telemetry(
+        tracer_provider, meter_provider, sem_conv_opt_in_mode
+    )
+    return _create_trace_config(
+        tracer=tracer,
+        duration_histogram_old=duration_histogram_old,
+        duration_histogram_new=duration_histogram_new,
+        excluded_urls=get_excluded_urls("AIOHTTP_CLIENT"),
+        url_filter=url_filter,
+        request_hook=request_hook,
+        response_hook=response_hook,
+        sem_conv_opt_in_mode=sem_conv_opt_in_mode,
+        captured_request_headers=captured_request_headers,
+        captured_response_headers=captured_response_headers,
+        sensitive_headers=sensitive_headers,
+    )
+
+
+def _create_telemetry(
+    tracer_provider: Union[TracerProvider, None],
+    meter_provider: Union[MeterProvider, None],
+    sem_conv_opt_in_mode: _StabilityMode,
+) -> tuple[Tracer, Union[Histogram, None], Union[Histogram, None]]:
     schema_url = _get_schema_url(sem_conv_opt_in_mode)
 
     tracer = get_tracer(
@@ -413,7 +441,24 @@ def create_trace_config(
             explicit_bucket_boundaries_advisory=HTTP_DURATION_HISTOGRAM_BUCKETS_NEW,
         )
 
-    excluded_urls = get_excluded_urls("AIOHTTP_CLIENT")
+    return tracer, duration_histogram_old, duration_histogram_new
+
+
+# pylint: disable=too-many-locals
+# pylint: disable=too-many-statements
+def _create_trace_config(
+    tracer: Tracer,
+    duration_histogram_old: Union[Histogram, None],
+    duration_histogram_new: Union[Histogram, None],
+    excluded_urls: ExcludeList,
+    url_filter: UrlFilterT,
+    request_hook: RequestHookT,
+    response_hook: ResponseHookT,
+    sem_conv_opt_in_mode: _StabilityMode,
+    captured_request_headers: typing.Optional[list[str]],
+    captured_response_headers: typing.Optional[list[str]],
+    sensitive_headers: typing.Optional[list[str]],
+) -> aiohttp.TraceConfig:
 
     def _end_trace(trace_config_ctx: types.SimpleNamespace):
         elapsed_time = max(default_timer() - trace_config_ctx.start_time, 0)
@@ -651,6 +696,11 @@ def _instrument(
 
     trace_configs = trace_configs or ()
 
+    tracer, duration_histogram_old, duration_histogram_new = _create_telemetry(
+        tracer_provider, meter_provider, sem_conv_opt_in_mode
+    )
+    excluded_urls = get_excluded_urls("AIOHTTP_CLIENT")
+
     # pylint:disable=unused-argument
     def instrumented_init(
         wrapped: Callable[..., None],
@@ -661,12 +711,14 @@ def _instrument(
         client_trace_configs = list(kwargs.get("trace_configs") or [])
         client_trace_configs.extend(trace_configs)
 
-        trace_config = create_trace_config(
+        trace_config = _create_trace_config(
+            tracer=tracer,
+            duration_histogram_old=duration_histogram_old,
+            duration_histogram_new=duration_histogram_new,
+            excluded_urls=excluded_urls,
             url_filter=url_filter,
             request_hook=request_hook,
             response_hook=response_hook,
-            tracer_provider=tracer_provider,
-            meter_provider=meter_provider,
             sem_conv_opt_in_mode=sem_conv_opt_in_mode,
             captured_request_headers=captured_request_headers,
             captured_response_headers=captured_response_headers,
