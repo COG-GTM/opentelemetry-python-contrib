@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-django`: read `SQLCOMMENTER_WITH_*` settings once per request in `SqlCommenter` instead of on every SQL query
