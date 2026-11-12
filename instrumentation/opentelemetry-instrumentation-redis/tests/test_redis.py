@@ -24,6 +24,7 @@ from opentelemetry.instrumentation._semconv import (
 from opentelemetry.instrumentation.redis import RedisInstrumentor
 from opentelemetry.instrumentation.redis.util import (
     _build_span_meta_data_for_pipeline,
+    _format_command_args,
 )
 from opentelemetry.instrumentation.utils import suppress_instrumentation
 from opentelemetry.semconv._incubating.attributes.db_attributes import (
@@ -331,6 +332,42 @@ class TestRedis(TestBase):
 
         spans = self.memory_exporter.get_finished_spans()
         self.assertEqual(len(spans), 0)
+
+    def test_query_not_formatted_when_not_recording(self):
+        RedisInstrumentor().uninstrument()
+        RedisInstrumentor().instrument(
+            tracer_provider=trace.NoOpTracerProvider()
+        )
+        redis_client = redis.Redis()
+
+        with mock.patch(
+            "opentelemetry.instrumentation.redis._format_command_args"
+        ) as format_args:
+            with mock.patch.object(redis_client, "connection"):
+                redis_client.get("key")
+
+        format_args.assert_not_called()
+
+    def test_format_command_args_truncates_large_commands(self):
+        def full_format(args):
+            out_str = " ".join([str(args[0])] + ["?"] * (len(args) - 1))
+            if len(out_str) > 1000:
+                out_str = out_str[:997] + "..."
+            return out_str
+
+        for command in ("MSET", "X" * 990, "Y" * 1500):
+            for args_length in (1, 2, 498, 499, 500, 501, 502, 503, 10000):
+                args = [command] + ["value"] * (args_length - 1)
+                with self.subTest(command=command, args_length=args_length):
+                    formatted = _format_command_args(args)
+                    self.assertEqual(formatted, full_format(args))
+                    self.assertLessEqual(len(formatted), 1000)
+
+        self.assertEqual(_format_command_args([]), "")
+        large = _format_command_args(["MSET"] + ["v"] * 100000)
+        self.assertEqual(len(large), 1000)
+        self.assertTrue(large.startswith("MSET ? ?"))
+        self.assertTrue(large.endswith("..."))
 
     def test_attributes_default(self):
         redis_client = redis.Redis()
@@ -833,6 +870,22 @@ class TestRedisAsync(TestBase, IsolatedAsyncioTestCase):
         # Pipeline span could be "SET" or "redis.pipeline" depending on implementation
         self.assertIn(spans[0].name, ["SET", "redis.pipeline"])
         self.instrumentor.uninstrument()
+
+    @pytest.mark.asyncio
+    async def test_query_not_formatted_when_not_recording_async(self):
+        self.instrumentor.instrument(
+            tracer_provider=trace.NoOpTracerProvider()
+        )
+        self.addCleanup(self.instrumentor.uninstrument)
+        redis_client = FakeRedis()
+
+        with mock.patch(
+            "opentelemetry.instrumentation.redis._format_command_args"
+        ) as format_args:
+            await redis_client.set("key", "value")
+
+        format_args.assert_not_called()
+        self.assert_span_count(0)
 
     @pytest.mark.asyncio
     async def test_suppress_instrumentation_async_mixed(self):

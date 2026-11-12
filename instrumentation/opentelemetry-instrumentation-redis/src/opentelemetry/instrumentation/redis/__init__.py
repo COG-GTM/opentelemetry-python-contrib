@@ -245,12 +245,12 @@ def _traced_execute_factory(
         if not is_instrumentation_enabled():
             return func(*args, **kwargs)
 
-        query = _format_command_args(args)
         name = _build_span_name(instance, args)
         with tracer.start_as_current_span(
             name, kind=trace.SpanKind.CLIENT
         ) as span:
             if span.is_recording():
+                query = _format_command_args(args)
                 span_attrs = {}
                 _set_db_statement(span_attrs, query, db_sem_conv_opt_in_mode)
                 span_attrs["db.redis.args_length"] = len(args)
@@ -379,13 +379,13 @@ def _async_traced_execute_factory(
         if not is_instrumentation_enabled():
             return await func(*args, **kwargs)
 
-        query = _format_command_args(args)
         name = _build_span_name(instance, args)
 
         with tracer.start_as_current_span(
             name, kind=trace.SpanKind.CLIENT
         ) as span:
             if span.is_recording():
+                query = _format_command_args(args)
                 span_attrs = {}
                 _set_db_statement(span_attrs, query, db_sem_conv_opt_in_mode)
                 span_attrs["db.redis.args_length"] = len(args)
