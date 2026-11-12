@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-tornado`: resolve captured request/response header configuration once at instrument time instead of on every server request

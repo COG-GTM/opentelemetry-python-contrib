@@ -3,6 +3,7 @@
 
 
 import asyncio
+from typing import Dict
 from unittest.mock import Mock, patch
 
 import tornado.websocket
@@ -50,8 +51,16 @@ from .tornado_test_app import (
     make_app,
 )
 
+_CAPTURE_HEADERS_ENV: Dict[str, str] = {
+    OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST: "Custom-Test-Header-1,Custom-Test-Header-2,Custom-Test-Header-3",
+    OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE: "content-type,content-length,my-custom-header,invalid-header",
+}
+
 
 class TornadoTest(AsyncHTTPTestCase, TestBase):
+    # Environment applied before instrument() runs.
+    instrument_env: Dict[str, str] = {}
+
     # pylint:disable=no-self-use
     def get_app(self):
         tracer = trace.get_tracer(__name__)
@@ -67,6 +76,10 @@ class TornadoTest(AsyncHTTPTestCase, TestBase):
         )
 
         _OpenTelemetrySemanticConventionStability._initialized = False  # pylint: disable=protected-access
+        self.instrument_env_patch = patch.dict(
+            "os.environ", self.instrument_env
+        )
+        self.instrument_env_patch.start()
         TornadoInstrumentor().instrument(
             server_request_hook=getattr(self, "server_request_hook", None),
             client_request_hook=getattr(self, "client_request_hook", None),
@@ -97,6 +110,7 @@ class TornadoTest(AsyncHTTPTestCase, TestBase):
         self.env_patch.stop()
         self.exclude_patch.stop()
         self.traced_patch.stop()
+        self.instrument_env_patch.stop()
         super().tearDown()
 
 
@@ -843,12 +857,8 @@ class TestTornadoWrappedWithOtherFramework(TornadoTest):
 
 
 class TestTornadoCustomRequestResponseHeadersAddedWithServerSpan(TornadoTest):
-    @patch.dict(
-        "os.environ",
-        {
-            OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST: "Custom-Test-Header-1,Custom-Test-Header-2,Custom-Test-Header-3"
-        },
-    )
+    instrument_env: Dict[str, str] = _CAPTURE_HEADERS_ENV
+
     def test_custom_request_headers_added_in_server_span(self):
         headers = {
             "Custom-Test-Header-1": "Test Value 1",
@@ -868,12 +878,32 @@ class TestTornadoCustomRequestResponseHeadersAddedWithServerSpan(TornadoTest):
         self.assertEqual(tornado_span.kind, trace.SpanKind.SERVER)
         self.assertSpanHasAttributes(tornado_span, expected)
 
-    @patch.dict(
-        "os.environ",
-        {
-            OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE: "content-type,content-length,my-custom-header,invalid-header"
-        },
-    )
+    def test_captured_headers_resolved_at_instrument_time(self):
+        with (
+            patch.dict("os.environ", clear=True),
+            patch(
+                "opentelemetry.instrumentation.tornado.get_custom_headers"
+            ) as get_custom_headers,
+        ):
+            response = self.fetch(
+                "/test_custom_response_headers",
+                headers={"Custom-Test-Header-1": "Test Value 1"},
+            )
+        self.assertEqual(response.code, 200)
+        get_custom_headers.assert_not_called()
+        tornado_span, _ = self.sorted_spans(
+            self.memory_exporter.get_finished_spans()
+        )
+        self.assertSpanHasAttributes(
+            tornado_span,
+            {
+                "http.request.header.custom_test_header_1": ("Test Value 1",),
+                "http.response.header.my_custom_header": (
+                    "my-custom-value-1,my-custom-header-2",
+                ),
+            },
+        )
+
     def test_custom_response_headers_added_in_server_span(self):
         response = self.fetch("/test_custom_response_headers")
         self.assertEqual(response.code, 200)
@@ -896,6 +926,8 @@ class TestTornadoCustomRequestResponseHeadersAddedWithServerSpan(TornadoTest):
 class TestTornadoCustomRequestResponseHeadersNotAddedWithInternalSpan(
     TornadoTest
 ):
+    instrument_env: Dict[str, str] = _CAPTURE_HEADERS_ENV
+
     def get_app(self):
         tracer = trace.get_tracer(__name__)
         app = make_app(tracer)
@@ -909,12 +941,6 @@ class TestTornadoCustomRequestResponseHeadersNotAddedWithInternalSpan(
 
         return middleware
 
-    @patch.dict(
-        "os.environ",
-        {
-            OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST: "Custom-Test-Header-1,Custom-Test-Header-2,Custom-Test-Header-3"
-        },
-    )
     def test_custom_request_headers_not_added_in_internal_span(self):
         headers = {
             "Custom-Test-Header-1": "Test Value 1",
@@ -935,12 +961,6 @@ class TestTornadoCustomRequestResponseHeadersNotAddedWithInternalSpan(
         for key, _ in not_expected.items():
             self.assertNotIn(key, tornado_span.attributes)
 
-    @patch.dict(
-        "os.environ",
-        {
-            OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE: "content-type,content-length,my-custom-header,invalid-header"
-        },
-    )
     def test_custom_response_headers_not_added_in_internal_span(self):
         response = self.fetch("/test_custom_response_headers")
         self.assertEqual(response.code, 200)
