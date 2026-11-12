@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-tornado`: resolve the matched route once per request instead of rescanning router rules for the span name and each metric attribute set

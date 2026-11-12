@@ -245,6 +245,7 @@ _HANDLER_CONTEXT_KEY = "_otel_trace_context_key"
 _OTEL_PATCHED_KEY = "_otel_patched_key"
 
 _START_TIME = "start_time"
+_ROUTE = "route"
 
 _excluded_urls = get_excluded_urls("TORNADO")
 _traced_request_attrs = get_traced_request_attrs("TORNADO")
@@ -685,7 +686,7 @@ def _get_attributes_from_request(request, sem_conv_opt_in_mode):
         query,
         sem_conv_opt_in_mode,
     )
-    _set_http_url(attrs, redact_url(request.uri), sem_conv_opt_in_mode)
+    _set_http_url(attrs, uri, sem_conv_opt_in_mode)
     user_agent = request.headers.get("user-agent")
     if user_agent:
         _set_http_user_agent(
@@ -737,12 +738,29 @@ def _get_default_span_name(handler):
     method = sanitize_method(handler.request.method)
     if method == "_OTHER":
         method = "HTTP"
-    rule = find_matched_rule(handler)
     # if there's no rule, like for 404 just return the method
-    route = route_from_rule(rule, handler) if rule else None
+    route = _get_route(handler)
     if method and route:
         return f"{method} {route}"
     return f"{method}"
+
+
+def _get_route(handler: tornado.web.RequestHandler) -> str | None:
+    """Return the low-cardinality route for the handler's request.
+
+    The matched rule and route cannot change during a request, so the result
+    is cached in the handler state to avoid rescanning the router rules and
+    re-inspecting the handler method signature.
+    """
+    otel_handler_state = getattr(handler, _HANDLER_STATE_KEY, None)
+    if otel_handler_state is not None and _ROUTE in otel_handler_state:
+        return otel_handler_state[_ROUTE]
+
+    rule = find_matched_rule(handler)
+    route = route_from_rule(rule, handler) if rule else None
+    if otel_handler_state is not None:
+        otel_handler_state[_ROUTE] = route
+    return route
 
 
 def _get_full_handler_name(handler):
@@ -958,11 +976,9 @@ def _create_active_requests_attributes_old(handler):
         HTTP_HOST: request.host,
     }
 
-    if rule := find_matched_rule(handler):
-        route = route_from_rule(rule, handler)
-
-        if route is not None:
-            metric_attributes[HTTP_TARGET] = route
+    route = _get_route(handler)
+    if route is not None:
+        metric_attributes[HTTP_TARGET] = route
     return metric_attributes
 
 
@@ -990,12 +1006,8 @@ def _create_metric_attributes_new(handler):
     metric_attributes[HTTP_RESPONSE_STATUS_CODE] = handler.get_status()
 
     if handler.request.path:
-        rule = find_matched_rule(handler)
-
-        if rule:
-            route = route_from_rule(rule, handler)
-
-            if route is not None:
-                metric_attributes[HTTP_ROUTE] = route
+        route = _get_route(handler)
+        if route is not None:
+            metric_attributes[HTTP_ROUTE] = route
 
     return metric_attributes
