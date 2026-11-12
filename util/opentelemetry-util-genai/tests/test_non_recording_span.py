@@ -287,8 +287,10 @@ class TestNonRecordingSpan(unittest.TestCase):
     def test_tool_unsampled_fail_records_error_metric(self):
         handler = self._make_handler(ALWAYS_OFF)
         invocation = handler.start_tool("get_weather", arguments={"q": 1})
-        invocation.fail(Error(message="boom", type=_BoomError))
+        with patch.object(invocation.span, "set_attributes") as set_attrs:
+            invocation.fail(Error(message="boom", type=_BoomError))
 
+        set_attrs.assert_not_called()
         self.assertEqual(self.span_exporter.get_finished_spans(), ())
         points = self._duration_point_attributes()
         self.assertEqual(len(points), 1)
@@ -299,8 +301,10 @@ class TestNonRecordingSpan(unittest.TestCase):
     def test_embedding_unsampled_fail_records_error_metric(self):
         handler = self._make_handler(ALWAYS_OFF)
         invocation = handler.start_embedding("prov", request_model="model")
-        invocation.fail(Error(message="boom", type=_BoomError))
+        with patch.object(invocation.span, "set_attributes") as set_attrs:
+            invocation.fail(Error(message="boom", type=_BoomError))
 
+        set_attrs.assert_not_called()
         self.assertEqual(self.span_exporter.get_finished_spans(), ())
         points = self._duration_point_attributes()
         self.assertEqual(len(points), 1)
