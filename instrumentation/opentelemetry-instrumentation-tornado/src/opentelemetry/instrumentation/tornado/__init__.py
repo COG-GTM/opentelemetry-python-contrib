@@ -745,7 +745,7 @@ def _get_default_span_name(handler):
     return f"{method}"
 
 
-def _get_route(handler):
+def _get_route(handler: tornado.web.RequestHandler) -> str | None:
     """Return the low-cardinality route for the handler's request.
 
     The matched rule and route cannot change during a request, so the result

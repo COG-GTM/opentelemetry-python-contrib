@@ -740,14 +740,14 @@ class TestTornadoSemconvHttpDup(TornadoSemconvTestBase):
 
 
 class TestTornadoRouteLookupPerRequest(TornadoSemconvTestBase):
-    def _instrument(self, sem_conv_opt_in):
+    def _instrument(self, sem_conv_opt_in: str) -> None:
         _OpenTelemetrySemanticConventionStability._initialized = False
         with patch.dict(
             "os.environ", {OTEL_SEMCONV_STABILITY_OPT_IN: sem_conv_opt_in}
         ):
             TornadoInstrumentor().instrument()
 
-    def _assert_route_resolved_once(self, sem_conv_opt_in):
+    def _assert_route_resolved_once(self, sem_conv_opt_in: str) -> None:
         self._instrument(sem_conv_opt_in)
         module = "opentelemetry.instrumentation.tornado"
         with (
@@ -775,16 +775,16 @@ class TestTornadoRouteLookupPerRequest(TornadoSemconvTestBase):
         )
         self.assertEqual(server_span.name, "GET /parametrized/{message}/")
 
-    def test_route_resolved_once_default(self):
+    def test_route_resolved_once_default(self) -> None:
         self._assert_route_resolved_once("")
 
-    def test_route_resolved_once_http(self):
+    def test_route_resolved_once_http(self) -> None:
         self._assert_route_resolved_once("http")
 
-    def test_route_resolved_once_http_dup(self):
+    def test_route_resolved_once_http_dup(self) -> None:
         self._assert_route_resolved_once("http/dup")
 
-    def test_route_attributes_http_dup(self):
+    def test_route_attributes_http_dup(self) -> None:
         self._instrument("http/dup")
         response = self.fetch("/parametrized/hello/")
         self.assertEqual(response.code, 200)
