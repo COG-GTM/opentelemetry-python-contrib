@@ -239,27 +239,55 @@ class BaseTestCases:
 
         def test_request_url_not_reparsed(self):
             instrumentation = opentelemetry.instrumentation.httpx
+            url_init = httpx.URL.__init__
+            url_parses = []
+            helper_args = {}
+
+            def track_url_parses(name):
+                helper = getattr(instrumentation, name)
+
+                def wrapper(*args, **kwargs):
+                    helper_args[name] = args
+                    with mock.patch.object(
+                        httpx.URL,
+                        "__init__",
+                        autospec=True,
+                        side_effect=url_init,
+                    ) as init_mock:
+                        try:
+                            return helper(*args, **kwargs)
+                        finally:
+                            url_parses.extend(init_mock.call_args_list)
+
+                return wrapper
+
             with (
                 mock.patch.object(
                     instrumentation,
                     "_extract_parameters",
-                    wraps=instrumentation._extract_parameters,
-                ) as extract_mock,
+                    track_url_parses("_extract_parameters"),
+                ),
                 mock.patch.object(
                     instrumentation,
                     "_apply_request_client_attributes_to_span",
-                    wraps=instrumentation._apply_request_client_attributes_to_span,
-                ) as apply_mock,
+                    track_url_parses(
+                        "_apply_request_client_attributes_to_span"
+                    ),
+                ),
             ):
                 self.perform_request(self.URL)
 
             span = self.assert_span()
             self.assertEqual(span.attributes[HTTP_URL], self.URL)
-            request = extract_mock.call_args.args[0][0]
+            request = helper_args["_extract_parameters"][0][0]
             if not isinstance(request, httpx.Request):
                 self.skipTest("httpx < 0.20 passes the URL as a raw tuple")
-            self.assertIs(apply_mock.call_args.args[2], request.url)
-            self.assertEqual(apply_mock.call_args.args[9], self.URL)
+            self.assertEqual(url_parses, [])
+            apply_args = helper_args[
+                "_apply_request_client_attributes_to_span"
+            ]
+            self.assertIs(apply_args[2], request.url)
+            self.assertEqual(apply_args[9], self.URL)
 
         def test_headers_not_normalized_when_capture_disabled(self):
             with mock.patch(
