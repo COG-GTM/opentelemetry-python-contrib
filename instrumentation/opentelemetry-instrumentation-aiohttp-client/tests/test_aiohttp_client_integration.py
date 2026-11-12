@@ -1643,6 +1643,8 @@ class TestAioHttpClientInstrumentor(TestBase):
             ) as get_excluded_urls,
         ):
             AioHttpClientInstrumentor().instrument()
+            for spy in (get_tracer, get_meter, get_excluded_urls):
+                self.assertEqual(spy.call_count, 1)
 
             async def request_per_session(
                 server: aiohttp.test_utils.TestServer,
