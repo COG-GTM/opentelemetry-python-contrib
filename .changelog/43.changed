@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation`: read the sqlcommenter ORM tags from the context once per query and cache quoted `key='value'` fragments so static connection meta is not re-quoted on every commented query
