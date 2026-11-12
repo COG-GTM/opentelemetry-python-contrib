@@ -287,7 +287,7 @@ class TortoiseORMInstrumentor(BaseInstrumentor):
             return await func(*args, **kwargs)
 
         exception = None
-        name = args[0].split()[0]
+        name = args[0].split(None, 1)[0]
 
         with self._tracer.start_as_current_span(
             name, kind=SpanKind.CLIENT
