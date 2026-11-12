@@ -146,6 +146,7 @@ API
 from __future__ import annotations
 
 from timeit import default_timer
+from typing import NamedTuple
 
 from aiohttp import web
 from multidict import CIMultiDictProxy
@@ -215,17 +216,36 @@ duration_histogram_new = None
 active_requests_counter = None
 _excluded_urls = None
 _sem_conv_opt_in_mode = _StabilityMode.DEFAULT
-_capture_request_headers: list[str] = get_custom_headers(
-    OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST
-)
-_capture_response_headers: list[str] = get_custom_headers(
-    OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE
-)
-_sanitize_header_fields = SanitizeValue(
-    get_custom_headers(
-        OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS
-    )
-)
+
+
+class _HeaderCaptureConfig(NamedTuple):
+    request_headers: list[str]
+    response_headers: list[str]
+    sanitize: SanitizeValue
+
+
+_header_capture_config: _HeaderCaptureConfig | None = None
+
+
+def _get_header_capture_config() -> _HeaderCaptureConfig:
+    """Reads the header capture env vars once and caches the result until
+    the next ``_instrument``."""
+    global _header_capture_config  # pylint: disable=global-statement
+    if _header_capture_config is None:
+        _header_capture_config = _HeaderCaptureConfig(
+            request_headers=get_custom_headers(
+                OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST
+            ),
+            response_headers=get_custom_headers(
+                OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE
+            ),
+            sanitize=SanitizeValue(
+                get_custom_headers(
+                    OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS
+                )
+            ),
+        )
+    return _header_capture_config
 
 
 def _parse_active_request_count_attrs(
@@ -352,11 +372,12 @@ def collect_request_attributes(
 def collect_request_headers_attributes(
     request: web.Request,
 ) -> dict[str, list[str]]:
-    if not _capture_request_headers:
+    config = _get_header_capture_config()
+    if not config.request_headers:
         return {}
-    return _sanitize_header_fields.sanitize_header_values(
+    return config.sanitize.sanitize_header_values(
         request.headers,
-        _capture_request_headers,
+        config.request_headers,
         normalise_request_header_name,
     )
 
@@ -364,11 +385,12 @@ def collect_request_headers_attributes(
 def collect_response_headers_attributes(
     response: web.Response,
 ) -> dict[str, list[str]]:
-    if not _capture_response_headers:
+    config = _get_header_capture_config()
+    if not config.response_headers:
         return {}
-    return _sanitize_header_fields.sanitize_header_values(
+    return config.sanitize.sanitize_header_values(
         response.headers,
-        _capture_response_headers,
+        config.response_headers,
         normalise_response_header_name,
     )
 
@@ -445,6 +467,7 @@ def create_aiohttp_middleware(
             return await handler(request)
 
         span_name = get_default_span_name(request)
+        header_capture_config = _get_header_capture_config()
 
         request_attrs = collect_request_attributes(
             request, _sem_conv_opt_in_mode
@@ -462,7 +485,7 @@ def create_aiohttp_middleware(
             set_status_on_exception=False,
             record_exception=False,
         ) as span:
-            if span.is_recording() and _capture_request_headers:
+            if span.is_recording() and header_capture_config.request_headers:
                 span.set_attributes(
                     collect_request_headers_attributes(request)
                 )
@@ -476,7 +499,10 @@ def create_aiohttp_middleware(
                     request_attrs,
                     _sem_conv_opt_in_mode,
                 )
-                if span.is_recording() and _capture_response_headers:
+                if (
+                    span.is_recording()
+                    and header_capture_config.response_headers
+                ):
                     response_headers_attributes = (
                         collect_response_headers_attributes(resp)
                     )
@@ -570,20 +596,8 @@ class AioHttpServerInstrumentor(BaseInstrumentor):
         global _sem_conv_opt_in_mode  # pylint: disable=global-statement
         _sem_conv_opt_in_mode = sem_conv_opt_in_mode
 
-        global _capture_request_headers  # pylint: disable=global-statement
-        global _capture_response_headers  # pylint: disable=global-statement
-        global _sanitize_header_fields  # pylint: disable=global-statement
-        _capture_request_headers = get_custom_headers(
-            OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST
-        )
-        _capture_response_headers = get_custom_headers(
-            OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE
-        )
-        _sanitize_header_fields = SanitizeValue(
-            get_custom_headers(
-                OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS
-            )
-        )
+        global _header_capture_config  # pylint: disable=global-statement
+        _header_capture_config = None
 
         global tracer  # pylint: disable=global-statement
         tracer = trace.get_tracer(
