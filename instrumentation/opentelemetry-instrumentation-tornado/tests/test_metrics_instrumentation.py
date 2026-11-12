@@ -11,6 +11,7 @@ import tornado.testing
 from tornado.testing import AsyncHTTPTestCase
 
 from opentelemetry import trace
+from opentelemetry.instrumentation import tornado as tornado_module
 from opentelemetry.instrumentation._semconv import (
     OTEL_SEMCONV_STABILITY_OPT_IN,
     _OpenTelemetrySemanticConventionStability,
@@ -735,4 +736,77 @@ class TestTornadoSemconvHttpDup(TornadoSemconvTestBase):
         )
         self.assertTrue(
             new_duration_found, "New semconv client metric not found"
+        )
+
+
+class TestTornadoRouteLookupPerRequest(TornadoSemconvTestBase):
+    def _instrument(self, sem_conv_opt_in):
+        _OpenTelemetrySemanticConventionStability._initialized = False
+        with patch.dict(
+            "os.environ", {OTEL_SEMCONV_STABILITY_OPT_IN: sem_conv_opt_in}
+        ):
+            TornadoInstrumentor().instrument()
+
+    def _assert_route_resolved_once(self, sem_conv_opt_in):
+        self._instrument(sem_conv_opt_in)
+        module = "opentelemetry.instrumentation.tornado"
+        with (
+            patch(
+                f"{module}.find_matched_rule",
+                wraps=tornado_module.find_matched_rule,
+            ) as find_matched_rule,
+            patch(
+                f"{module}.route_from_rule",
+                wraps=tornado_module.route_from_rule,
+            ) as route_from_rule,
+            patch(
+                f"{module}.redact_url", wraps=tornado_module.redact_url
+            ) as redact_url,
+        ):
+            response = self.fetch("/parametrized/hello/?q=1")
+
+        self.assertEqual(response.code, 200)
+        self.assertEqual(find_matched_rule.call_count, 1)
+        self.assertEqual(route_from_rule.call_count, 1)
+        self.assertEqual(redact_url.call_count, 1)
+
+        server_span = self._get_server_span(
+            self.memory_exporter.get_finished_spans()
+        )
+        self.assertEqual(server_span.name, "GET /parametrized/{message}/")
+
+    def test_route_resolved_once_default(self):
+        self._assert_route_resolved_once("")
+
+    def test_route_resolved_once_http(self):
+        self._assert_route_resolved_once("http")
+
+    def test_route_resolved_once_http_dup(self):
+        self._assert_route_resolved_once("http/dup")
+
+    def test_route_attributes_http_dup(self):
+        self._instrument("http/dup")
+        response = self.fetch("/parametrized/hello/")
+        self.assertEqual(response.code, 200)
+
+        route = "/parametrized/{message}/"
+        metrics = self.get_sorted_metrics(SCOPE)
+        checked = set()
+        for metric in metrics:
+            for point in metric.data.data_points:
+                if metric.name in NEW_SERVER_METRICS:
+                    self.assertEqual(point.attributes[HTTP_ROUTE], route)
+                    checked.add(metric.name)
+                elif metric.name.startswith("http.server."):
+                    self.assertEqual(point.attributes[HTTP_TARGET], route)
+                    checked.add(metric.name)
+        self.assertEqual(
+            checked,
+            {
+                "http.server.active_requests",
+                "http.server.duration",
+                "http.server.request.size",
+                "http.server.response.size",
+                *NEW_SERVER_METRICS,
+            },
         )
