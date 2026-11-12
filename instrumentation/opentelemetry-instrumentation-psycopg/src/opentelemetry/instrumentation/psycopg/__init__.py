@@ -133,7 +133,9 @@ API
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Collection, TypeVar
+import re
+from contextvars import ContextVar
+from typing import Any, Awaitable, Callable, Collection, TypeVar
 
 import psycopg  # pylint: disable=import-self
 from psycopg.sql import Composable  # pylint: disable=no-name-in-module
@@ -151,6 +153,13 @@ ConnectionT = TypeVar(
     "ConnectionT", psycopg.Connection, psycopg.AsyncConnection
 )
 CursorT = TypeVar("CursorT", psycopg.Cursor, psycopg.AsyncCursor)
+
+_FIRST_TOKEN = re.compile(r"\S+")
+# Composable rendered by the current traced execution, so that the operation
+# name and the statement attribute share a single ``as_string`` call.
+_RENDERED_COMPOSABLE: ContextVar[tuple[Composable, Any, str] | None] = (
+    ContextVar("otel_psycopg_rendered_composable", default=None)
+)
 
 
 class PsycopgInstrumentor(BaseInstrumentor):
@@ -322,18 +331,61 @@ class DatabaseApiAsyncIntegration(dbapi.DatabaseApiIntegration):
 
 
 class CursorTracer(dbapi.CursorTracer):
+    def traced_execution(
+        self,
+        cursor: CursorT,
+        query_method: Callable[..., Any],
+        *args: tuple[Any, ...],
+        **kwargs: dict[Any, Any],
+    ):
+        token = _RENDERED_COMPOSABLE.set(None)
+        try:
+            return super().traced_execution(
+                cursor, query_method, *args, **kwargs
+            )
+        finally:
+            _RENDERED_COMPOSABLE.reset(token)
+
+    async def traced_execution_async(
+        self,
+        cursor: CursorT,
+        query_method: Callable[..., Awaitable[Any]],
+        *args: tuple[Any, ...],
+        **kwargs: dict[Any, Any],
+    ):
+        token = _RENDERED_COMPOSABLE.set(None)
+        try:
+            return await super().traced_execution_async(
+                cursor, query_method, *args, **kwargs
+            )
+        finally:
+            _RENDERED_COMPOSABLE.reset(token)
+
+    @staticmethod
+    def _render_composable(cursor: CursorT, statement: Composable) -> str:
+        rendered = _RENDERED_COMPOSABLE.get()
+        if (
+            rendered is not None
+            and rendered[0] is statement
+            and rendered[1] is cursor
+        ):
+            return rendered[2]
+        text = statement.as_string(cursor)
+        _RENDERED_COMPOSABLE.set((statement, cursor, text))
+        return text
+
     def get_operation_name(self, cursor: CursorT, args: list[Any]) -> str:
         if not args:
             return ""
 
         statement = args[0]
         if isinstance(statement, Composable):
-            statement = statement.as_string(cursor)
-            return (
-                self._leading_comment_remover.sub("", statement).split()[0]
-                if statement
-                else ""
+            statement = self._render_composable(cursor, statement)
+            leading_comment = self._leading_comment_remover.match(statement)
+            first_token = _FIRST_TOKEN.search(
+                statement, leading_comment.end() if leading_comment else 0
             )
+            return first_token.group() if first_token else ""
         return super().get_operation_name(cursor, args)
 
     def get_statement(self, cursor: CursorT, args: list[Any]) -> str:
@@ -342,7 +394,7 @@ class CursorTracer(dbapi.CursorTracer):
 
         statement = args[0]
         if isinstance(statement, Composable):
-            return statement.as_string(cursor)
+            return self._render_composable(cursor, statement)
         return super().get_statement(cursor, args)
 
 
