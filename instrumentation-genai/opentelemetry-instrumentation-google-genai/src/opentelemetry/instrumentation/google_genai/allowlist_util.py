@@ -44,6 +44,10 @@ class _CompoundMatcher:
     def match_all(self):
         return self._match_all
 
+    @property
+    def is_empty(self):
+        return not self._entries
+
     def matches(self, x):
         if self._match_all:
             return True
@@ -67,6 +71,10 @@ class AllowList:
         assert (not self._includes.match_all) or (
             not self._excludes.match_all
         ), "Can't have '*' in both includes and excludes."
+
+    @property
+    def denies_all(self) -> bool:
+        return self._includes.is_empty
 
     def allowed(self, x: str):
         if self._excludes.match_all:

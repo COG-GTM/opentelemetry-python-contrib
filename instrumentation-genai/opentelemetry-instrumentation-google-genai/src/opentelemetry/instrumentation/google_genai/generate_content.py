@@ -347,13 +347,65 @@ def _tool_def_without_parameters_attr(
     }
 
 
+# Although a custom prefix is used by default, some of the attributes
+# are captured in common, standard, Semantic Conventions. For the
+# well-known properties whose values align with Semantic Conventions,
+# we ensure that the key name matches the standard SemConv name.
+_SEMCONV_RENAMED_CONFIG_KEYS = {
+    # TODO: add more entries here as more semantic conventions are
+    # generalized to cover more of the available config options.
+    "temperature": gen_ai_attributes.GEN_AI_REQUEST_TEMPERATURE,
+    "top_k": gen_ai_attributes.GEN_AI_REQUEST_TOP_K,
+    "top_p": gen_ai_attributes.GEN_AI_REQUEST_TOP_P,
+    "candidate_count": gen_ai_attributes.GEN_AI_REQUEST_CHOICE_COUNT,
+    "max_output_tokens": gen_ai_attributes.GEN_AI_REQUEST_MAX_TOKENS,
+    "stop_sequences": gen_ai_attributes.GEN_AI_REQUEST_STOP_SEQUENCES,
+    "frequency_penalty": gen_ai_attributes.GEN_AI_REQUEST_FREQUENCY_PENALTY,
+    "presence_penalty": gen_ai_attributes.GEN_AI_REQUEST_PRESENCE_PENALTY,
+    "seed": gen_ai_attributes.GEN_AI_REQUEST_SEED,
+}
+
+_RENAMED_CONFIG_ATTRIBUTE_KEYS = {
+    f"{GCP_GENAI_OPERATION_CONFIG}.{key}": semconv_key
+    for key, semconv_key in _SEMCONV_RENAMED_CONFIG_KEYS.items()
+}
+
+# Config fields that can produce attributes even when the allowlist rejects
+# every "gcp.gen_ai.operation.config.*" key.
+_ALWAYS_RECORDED_CONFIG_KEYS = frozenset(
+    [*_SEMCONV_RENAMED_CONFIG_KEYS, "response_mime_type"]
+)
+
+
+def _config_to_request_dict(
+    config: GenerateContentConfigOrDict,
+    allow_list: AllowList,
+) -> dict[str, Any]:
+    if not allow_list.denies_all:
+        return _to_dict(config)
+    # Avoid dumping and flattening the whole config (tools, schemas, ...)
+    # only to discard every resulting key afterwards.
+    if isinstance(config, dict):
+        return {
+            key: value
+            for key, value in config.items()
+            if key in _ALWAYS_RECORDED_CONFIG_KEYS
+        }
+    if hasattr(config, "model_dump"):
+        try:
+            return config.model_dump(include=_ALWAYS_RECORDED_CONFIG_KEYS)
+        except TypeError:
+            pass
+    return _to_dict(config)
+
+
 def _create_request_attributes(
     config: Optional[GenerateContentConfigOrDict],
     allow_list: AllowList,
 ) -> dict[str, AttributeValue]:
     if not config:
         return {}
-    config = _to_dict(config)
+    config = _config_to_request_dict(config, allow_list)
     attributes = flatten_dict(
         config,
         # A custom prefix is used, because the names/structure of the
@@ -364,23 +416,7 @@ def _create_request_attributes(
             # Additionally, it is recorded as an event (log), instead.
             "gcp.gen_ai.operation.config.system_instruction",
         ],
-        # Although a custom prefix is used by default, some of the attributes
-        # are captured in common, standard, Semantic Conventions. For the
-        # well-known properties whose values align with Semantic Conventions,
-        # we ensure that the key name matches the standard SemConv name.
-        rename_keys={
-            # TODO: add more entries here as more semantic conventions are
-            # generalized to cover more of the available config options.
-            "gcp.gen_ai.operation.config.temperature": gen_ai_attributes.GEN_AI_REQUEST_TEMPERATURE,
-            "gcp.gen_ai.operation.config.top_k": gen_ai_attributes.GEN_AI_REQUEST_TOP_K,
-            "gcp.gen_ai.operation.config.top_p": gen_ai_attributes.GEN_AI_REQUEST_TOP_P,
-            "gcp.gen_ai.operation.config.candidate_count": gen_ai_attributes.GEN_AI_REQUEST_CHOICE_COUNT,
-            "gcp.gen_ai.operation.config.max_output_tokens": gen_ai_attributes.GEN_AI_REQUEST_MAX_TOKENS,
-            "gcp.gen_ai.operation.config.stop_sequences": gen_ai_attributes.GEN_AI_REQUEST_STOP_SEQUENCES,
-            "gcp.gen_ai.operation.config.frequency_penalty": gen_ai_attributes.GEN_AI_REQUEST_FREQUENCY_PENALTY,
-            "gcp.gen_ai.operation.config.presence_penalty": gen_ai_attributes.GEN_AI_REQUEST_PRESENCE_PENALTY,
-            "gcp.gen_ai.operation.config.seed": gen_ai_attributes.GEN_AI_REQUEST_SEED,
-        },
+        rename_keys=_RENAMED_CONFIG_ATTRIBUTE_KEYS,
     )
     response_mime_type = config.get("response_mime_type")
     if response_mime_type:
