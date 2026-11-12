@@ -350,7 +350,7 @@ class TestRedis(TestBase):
         format_args.assert_not_called()
 
     def test_format_command_args_truncates_large_commands(self):
-        def full_format(args):
+        def full_format(args: list[str]) -> str:
             out_str = " ".join([str(args[0])] + ["?"] * (len(args) - 1))
             if len(out_str) > 1000:
                 out_str = out_str[:997] + "..."
@@ -368,10 +368,10 @@ class TestRedis(TestBase):
 
     def test_format_command_args_caps_placeholders(self):
         class HugeArgs:
-            def __len__(self):
+            def __len__(self) -> int:
                 return sys.maxsize
 
-            def __getitem__(self, index):
+            def __getitem__(self, index: int) -> str:
                 return "MSET"
 
         # One placeholder per argument would raise MemoryError here.
