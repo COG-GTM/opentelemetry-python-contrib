@@ -660,6 +660,7 @@ class TestAwsLambdaInstrumentor(TestAwsLambdaInstrumentorBase):
             wraps=get_tracer,
         ) as get_tracer_mock:
             AwsLambdaInstrumentor().instrument()
+            get_tracer_mock.assert_called_once()
 
             mock_execute_lambda(MOCK_LAMBDA_API_GATEWAY_HTTP_API_EVENT)
             mock_execute_lambda(MOCK_LAMBDA_API_GATEWAY_HTTP_API_EVENT)
