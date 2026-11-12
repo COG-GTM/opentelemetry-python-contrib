@@ -149,3 +149,12 @@ def test_supports_wildcards_in_loading_from_env():
     assert not allow_list.allowed("bar")
     assert allow_list.allowed("blah")
     assert allow_list.allowed("not in the list")
+
+
+def test_denies_all_only_when_includes_empty():
+    assert AllowList().denies_all
+    assert AllowList(excludes=["*"]).denies_all
+    assert AllowList(excludes=["foo"]).denies_all
+    assert not AllowList(includes=["*"]).denies_all
+    assert not AllowList(includes=["foo"]).denies_all
+    assert not AllowList(includes=["foo.*"], excludes=["*"]).denies_all
