@@ -13,6 +13,7 @@ from opentelemetry.instrumentation.django import DjangoInstrumentor
 from opentelemetry.instrumentation.django.middleware.sqlcommenter_middleware import (
     SqlCommenter,
     _QueryWrapper,
+    _SqlCommenterSettings,
 )
 from opentelemetry.test.wsgitestutil import WsgiTestBase
 
@@ -153,11 +154,15 @@ class TestMiddleware(WsgiTestBase):
         )
 
     @patch(
-        "opentelemetry.instrumentation.django.middleware.sqlcommenter_middleware._QueryWrapper"
+        "opentelemetry.instrumentation.django.middleware.sqlcommenter_middleware.connections"
     )
-    def test_multiple_connection_support(self, query_wrapper):
+    def test_multiple_connection_support(self, connections_mock):
         if not DJANGO_2_0:
             pytest.skip()
+
+        db_connections = {"default": MagicMock(), "other": MagicMock()}
+        connections_mock.__iter__.return_value = iter(db_connections)
+        connections_mock.__getitem__.side_effect = db_connections.__getitem__
 
         requests_mock = MagicMock()
         get_response = MagicMock()
@@ -166,7 +171,88 @@ class TestMiddleware(WsgiTestBase):
         sql_instance(requests_mock)
 
         # check if query_wrapper is added to the context for 2 databases
-        self.assertEqual(query_wrapper.call_count, 2)
+        wrappers = []
+        for connection in db_connections.values():
+            connection.execute_wrapper.assert_called_once()
+            wrappers.append(connection.execute_wrapper.call_args[0][0])
+        self.assertIsInstance(wrappers[0], _QueryWrapper)
+        self.assertIs(wrappers[0], wrappers[1])
+        self.assertIs(wrappers[0].request, requests_mock)
+        get_response.assert_called_once_with(requests_mock)
+
+    @patch(
+        "opentelemetry.instrumentation.django.middleware.sqlcommenter_middleware._QueryWrapper"
+    )
+    def test_settings_read_once_per_request(self, query_wrapper):
+        if not DJANGO_2_0:
+            pytest.skip()
+
+        requests_mock = MagicMock()
+        sql_instance = SqlCommenter(MagicMock())
+
+        with patch.object(
+            _SqlCommenterSettings,
+            "from_django_settings",
+            wraps=_SqlCommenterSettings.from_django_settings,
+        ) as from_django_settings:
+            sql_instance(requests_mock)
+
+        from_django_settings.assert_called_once_with()
+        query_wrapper.assert_called_once_with(
+            requests_mock,
+            _SqlCommenterSettings(
+                with_framework=False,
+                with_controller=True,
+                with_route=True,
+                with_app_name=True,
+                with_opentelemetry=True,
+                with_db_driver=False,
+            ),
+        )
+
+    @patch(
+        "opentelemetry.instrumentation.django.middleware.sqlcommenter_middleware._get_opentelemetry_values"
+    )
+    def test_query_wrapper_does_not_read_settings_per_query(
+        self, trace_capture
+    ):
+        requests_mock = MagicMock()
+        requests_mock.resolver_match.view_name = "view"
+        requests_mock.resolver_match.route = "route"
+        requests_mock.resolver_match.app_name = "app"
+        trace_capture.return_value = {}
+
+        qw_instance = _QueryWrapper(
+            requests_mock,
+            _SqlCommenterSettings(
+                with_framework=False,
+                with_controller=True,
+                with_route=False,
+                with_app_name=True,
+                with_opentelemetry=False,
+                with_db_driver=False,
+            ),
+        )
+        execute_mock_obj = MagicMock()
+        with patch.object(
+            _SqlCommenterSettings, "from_django_settings"
+        ) as from_django_settings:
+            for _ in range(3):
+                qw_instance(
+                    execute_mock_obj,
+                    "Select 1;",
+                    MagicMock("test"),
+                    MagicMock("test1"),
+                    MagicMock(),
+                )
+
+        from_django_settings.assert_not_called()
+        trace_capture.assert_not_called()
+        self.assertEqual(execute_mock_obj.call_count, 3)
+        self.assertEqual(
+            execute_mock_obj.call_args[0][0],
+            "Select 1 /*app_name='app',controller='view'*/;",
+        )
 
     @patch(
         "opentelemetry.instrumentation.django.middleware.sqlcommenter_middleware._get_opentelemetry_values"

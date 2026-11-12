@@ -1,8 +1,10 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
+from __future__ import annotations
+
 from contextlib import ExitStack
 from logging import getLogger
-from typing import Any, Type, TypeVar
+from typing import Any, NamedTuple, Type, TypeVar
 
 # pylint: disable=no-name-in-module
 from django import conf, get_version
@@ -22,6 +24,37 @@ _logger = getLogger(__name__)
 T = TypeVar("T")  # pylint: disable-msg=invalid-name
 
 
+class _SqlCommenterSettings(NamedTuple):
+    with_framework: bool
+    with_controller: bool
+    with_route: bool
+    with_app_name: bool
+    with_opentelemetry: bool
+    with_db_driver: bool
+
+    @classmethod
+    def from_django_settings(cls) -> _SqlCommenterSettings:
+        settings = conf.settings
+        return cls(
+            with_framework=getattr(
+                settings, "SQLCOMMENTER_WITH_FRAMEWORK", True
+            ),
+            with_controller=getattr(
+                settings, "SQLCOMMENTER_WITH_CONTROLLER", True
+            ),
+            with_route=getattr(settings, "SQLCOMMENTER_WITH_ROUTE", True),
+            with_app_name=getattr(
+                settings, "SQLCOMMENTER_WITH_APP_NAME", True
+            ),
+            with_opentelemetry=getattr(
+                settings, "SQLCOMMENTER_WITH_OPENTELEMETRY", True
+            ),
+            with_db_driver=getattr(
+                settings, "SQLCOMMENTER_WITH_DB_DRIVER", True
+            ),
+        )
+
+
 class SqlCommenter:
     """
     Middleware to append a comment to each database query with details about
@@ -32,38 +65,39 @@ class SqlCommenter:
         self.get_response = get_response
 
     def __call__(self, request) -> Any:
+        # Read once per request (not per query) so override_settings still applies.
+        query_wrapper = _QueryWrapper(
+            request, _SqlCommenterSettings.from_django_settings()
+        )
         with ExitStack() as stack:
             for db_alias in connections:
                 stack.enter_context(
-                    connections[db_alias].execute_wrapper(
-                        _QueryWrapper(request)
-                    )
+                    connections[db_alias].execute_wrapper(query_wrapper)
                 )
             return self.get_response(request)
 
 
 class _QueryWrapper:
-    def __init__(self, request) -> None:
+    def __init__(
+        self, request, settings: _SqlCommenterSettings | None = None
+    ) -> None:
         self.request = request
+        self.settings = (
+            settings
+            if settings is not None
+            else _SqlCommenterSettings.from_django_settings()
+        )
 
     def __call__(self, execute: Type[T], sql, params, many, context) -> T:
         # pylint: disable-msg=too-many-locals
-        with_framework = getattr(
-            conf.settings, "SQLCOMMENTER_WITH_FRAMEWORK", True
-        )
-        with_controller = getattr(
-            conf.settings, "SQLCOMMENTER_WITH_CONTROLLER", True
-        )
-        with_route = getattr(conf.settings, "SQLCOMMENTER_WITH_ROUTE", True)
-        with_app_name = getattr(
-            conf.settings, "SQLCOMMENTER_WITH_APP_NAME", True
-        )
-        with_opentelemetry = getattr(
-            conf.settings, "SQLCOMMENTER_WITH_OPENTELEMETRY", True
-        )
-        with_db_driver = getattr(
-            conf.settings, "SQLCOMMENTER_WITH_DB_DRIVER", True
-        )
+        (
+            with_framework,
+            with_controller,
+            with_route,
+            with_app_name,
+            with_opentelemetry,
+            with_db_driver,
+        ) = self.settings
 
         db_driver = context["connection"].settings_dict.get("ENGINE", "")
         resolver_match = self.request.resolver_match
