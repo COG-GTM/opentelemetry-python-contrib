@@ -606,11 +606,12 @@ class TestAiopgIntegration(TestBase):
 
     def test_pool_proxies_reuse_classes(self):
         db_integration = AiopgIntegration(self.tracer, "testcomponent")
+        other_integration = AiopgIntegration(self.tracer, "othercomponent")
         pool = async_call(
             db_integration.wrapped_pool(mock_create_pool, {}, {})
         )
         other_pool = async_call(
-            db_integration.wrapped_pool(mock_create_pool, {}, {})
+            other_integration.wrapped_pool(mock_create_pool, {}, {})
         )
         self.assertIsNot(pool, other_pool)
         self.assertIs(type(pool), type(other_pool))
@@ -633,6 +634,10 @@ class TestAiopgIntegration(TestBase):
         self.assertEqual(
             [span.attributes[DB_STATEMENT] for span in spans_list],
             ["SELECT 1", "SELECT 2"],
+        )
+        self.assertEqual(
+            [span.attributes[DB_SYSTEM] for span in spans_list],
+            ["testcomponent", "othercomponent"],
         )
 
     def test_wrap_connect(self):
