@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-openai-agents-v2`: skip message normalization and agent content aggregation for spans whose own and parent agent OTel spans are not recording, and merge agent content in place instead of re-cloning it on every child span end
