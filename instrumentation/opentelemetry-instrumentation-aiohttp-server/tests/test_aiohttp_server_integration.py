@@ -686,7 +686,11 @@ async def test_custom_headers_config_read_once_per_instrument(
 
     async def handler(request):
         return aiohttp.web.Response(
-            text="hello", headers={"custom-test-header-2": "value-2"}
+            text="hello",
+            headers={
+                "custom-test-header-2": "value-2",
+                "custom-test-header-3": "value-3",
+            },
         )
 
     app.router.add_get("/status/200", handler)
@@ -698,8 +702,14 @@ async def test_custom_headers_config_read_once_per_instrument(
         "My-Secret-Header": "My Secret Value",
     }
     async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers) as response:
-            assert response.status == 200
+        with mock.patch.object(
+            aiohttp_server_module,
+            "get_custom_headers",
+            wraps=aiohttp_server_module.get_custom_headers,
+        ) as first_request_reads:
+            async with session.get(url, headers=headers) as response:
+                assert response.status == 200
+        assert first_request_reads.call_count == 3
 
         patch_env, patch_sanitize = _patch_header_capture_config_rebuild()
         with patch_env as get_custom_headers, patch_sanitize as sanitize_value:
@@ -707,12 +717,33 @@ async def test_custom_headers_config_read_once_per_instrument(
                 async with session.get(url, headers=headers) as response:
                     assert response.status == 200
 
-    get_custom_headers.assert_not_called()
-    sanitize_value.assert_not_called()
+        get_custom_headers.assert_not_called()
+        sanitize_value.assert_not_called()
+
+        monkeypatch.setenv(
+            OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE,
+            "custom-test-header-3",
+        )
+        AioHttpServerInstrumentor().uninstrument()
+        AioHttpServerInstrumentor().instrument()
+        async with session.get(url, headers=headers) as response:
+            assert response.status == 200
 
     spans = test_base.get_finished_spans()
-    assert len(spans) == 4
-    for span in spans:
+    assert len(spans) == 5
+    reinstrumented_span = spans[-1]
+    assert reinstrumented_span.attributes.get(
+        "http.response.header.custom_test_header_3"
+    ) == ("value-3",)
+    assert (
+        "http.response.header.custom_test_header_2"
+        not in reinstrumented_span.attributes
+    )
+
+    for span in spans[:4]:
+        assert (
+            "http.response.header.custom_test_header_3" not in span.attributes
+        )
         assert span.attributes.get(
             "http.request.header.custom_test_header_1"
         ) == ("value-1",)
