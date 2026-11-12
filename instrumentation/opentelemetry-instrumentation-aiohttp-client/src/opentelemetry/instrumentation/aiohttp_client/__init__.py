@@ -421,7 +421,15 @@ def create_trace_config(
         )
 
     excluded_urls = get_excluded_urls("AIOHTTP_CLIENT")
-    header_sanitizer = SanitizeValue(sensitive_headers or ())
+    header_sanitizer: SanitizeValue | None = None
+
+    def _get_header_sanitizer() -> SanitizeValue:
+        # Built on first use so an unused sensitive_headers setting is never
+        # compiled.
+        nonlocal header_sanitizer
+        if header_sanitizer is None:
+            header_sanitizer = SanitizeValue(sensitive_headers or ())
+        return header_sanitizer
 
     def _end_trace(trace_config_ctx: types.SimpleNamespace):
         elapsed_time = max(default_timer() - trace_config_ctx.start_time, 0)
@@ -531,7 +539,7 @@ def create_trace_config(
 
         if captured_request_headers:
             span_attributes.update(
-                header_sanitizer.sanitize_header_values(
+                _get_header_sanitizer().sanitize_header_values(
                     _get_header_values(params.headers),
                     captured_request_headers,
                     normalise_request_header_name,
@@ -570,7 +578,7 @@ def create_trace_config(
 
         if captured_response_headers and trace_config_ctx.span.is_recording():
             trace_config_ctx.span.set_attributes(
-                header_sanitizer.sanitize_header_values(
+                _get_header_sanitizer().sanitize_header_values(
                     _get_header_values(params.response.headers),
                     captured_response_headers,
                     normalise_response_header_name,

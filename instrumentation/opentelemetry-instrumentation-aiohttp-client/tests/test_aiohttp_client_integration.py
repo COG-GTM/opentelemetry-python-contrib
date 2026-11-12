@@ -1120,6 +1120,22 @@ class TestAioHttpIntegration(TestBase):
         self._assert_single_span()
         group_header_values.assert_not_called()
 
+    def test_invalid_sensitive_headers_ignored_when_capture_not_configured(
+        self,
+    ):
+        """Test that an unused, invalid sensitive_headers regex is not compiled."""
+        trace_config = aiohttp_client.create_trace_config(
+            sensitive_headers=["["],
+        )
+
+        self._http_request(
+            trace_config=trace_config,
+            url="/test-path",
+            status_code=200,
+        )
+
+        self._assert_single_span()
+
     def test_response_headers_not_collected_when_span_not_recording(self):
         """Test that response headers are skipped for non-recording spans."""
         trace_config = aiohttp_client.create_trace_config(
