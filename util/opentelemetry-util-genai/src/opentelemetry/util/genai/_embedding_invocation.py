@@ -95,26 +95,30 @@ class EmbeddingInvocation(GenAIInvocation):
         return {}
 
     def _apply_finish(self, error: Error | None = None) -> None:
-        optional_attrs = (
-            (GenAI.GEN_AI_PROVIDER_NAME, self.provider),
-            (server_attributes.SERVER_ADDRESS, self.server_address),
-            (server_attributes.SERVER_PORT, self.server_port),
-            (GenAI.GEN_AI_REQUEST_MODEL, self.request_model),
-            (GenAI.GEN_AI_EMBEDDINGS_DIMENSION_COUNT, self.dimension_count),
-            (GenAI.GEN_AI_REQUEST_ENCODING_FORMATS, self.encoding_formats),
-            (GenAI.GEN_AI_RESPONSE_MODEL, self.response_model_name),
-            (GenAI.GEN_AI_USAGE_INPUT_TOKENS, self.input_tokens),
-        )
-        attributes: dict[str, Any] = {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            **{
-                key: value
-                for key, value in optional_attrs
-                if value is not None
-            },
-        }
         if error is not None:
             self._apply_error_attributes(error)
-        attributes.update(self.attributes)
-        self.span.set_attributes(attributes)
+        if self.span.is_recording():
+            optional_attrs = (
+                (GenAI.GEN_AI_PROVIDER_NAME, self.provider),
+                (server_attributes.SERVER_ADDRESS, self.server_address),
+                (server_attributes.SERVER_PORT, self.server_port),
+                (GenAI.GEN_AI_REQUEST_MODEL, self.request_model),
+                (
+                    GenAI.GEN_AI_EMBEDDINGS_DIMENSION_COUNT,
+                    self.dimension_count,
+                ),
+                (GenAI.GEN_AI_REQUEST_ENCODING_FORMATS, self.encoding_formats),
+                (GenAI.GEN_AI_RESPONSE_MODEL, self.response_model_name),
+                (GenAI.GEN_AI_USAGE_INPUT_TOKENS, self.input_tokens),
+            )
+            attributes: dict[str, Any] = {
+                GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
+                **{
+                    key: value
+                    for key, value in optional_attrs
+                    if value is not None
+                },
+            }
+            attributes.update(self.attributes)
+            self.span.set_attributes(attributes)
         self._metrics_recorder.record(self)

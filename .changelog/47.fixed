@@ -1,0 +1,1 @@
+`opentelemetry-util-genai`: skip building span attributes (including JSON serialization of message content and tool definitions) when the invocation span is not recording

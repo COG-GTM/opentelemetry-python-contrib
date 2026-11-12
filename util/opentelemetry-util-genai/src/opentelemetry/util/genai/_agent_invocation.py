@@ -211,15 +211,15 @@ class AgentInvocation(GenAIInvocation):
     def _apply_finish(self, error: Error | None = None) -> None:
         if error is not None:
             self._apply_error_attributes(error)
-
-        attributes: dict[str, Any] = {}
-        attributes.update(self._get_common_attributes())
-        attributes.update(self._get_request_attributes())
-        attributes.update(self._get_response_attributes())
-        attributes.update(self._get_usage_attributes())
-        attributes.update(self._get_content_attributes_for_span())
-        attributes.update(self.attributes)
-        self.span.set_attributes(attributes)
+        if self.span.is_recording():
+            attributes: dict[str, Any] = {}
+            attributes.update(self._get_common_attributes())
+            attributes.update(self._get_request_attributes())
+            attributes.update(self._get_response_attributes())
+            attributes.update(self._get_usage_attributes())
+            attributes.update(self._get_content_attributes_for_span())
+            attributes.update(self.attributes)
+            self.span.set_attributes(attributes)
         self._call_completion_hook(
             inputs=self.input_messages,
             outputs=self.output_messages,
