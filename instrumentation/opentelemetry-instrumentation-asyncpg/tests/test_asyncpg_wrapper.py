@@ -146,7 +146,9 @@ class TestAsyncPGInstrumentation(TestBase):
         apg.instrument(tracer_provider=self.tracer_provider)
 
         # init the cursor and fetch a single record
-        crs = cursor.Cursor(conn, "SELECT * FROM test", state, [], Record)
+        crs = cursor.Cursor(
+            conn, "\n  /* c */ SELECT *\n  FROM test", state, [], Record
+        )
         asyncio.run(crs._init(1))
         asyncio.run(crs.fetch(1))
 
@@ -295,6 +297,28 @@ class TestAsyncPGInstrumentation(TestBase):
 
                 apg.uninstrument()
 
+    def test_prepared_statement_span_name_strips_comments_and_whitespace(
+        self,
+    ):
+        cases = {
+            "\n  /* leading comment */\n  SELECT *\n  FROM t": "SELECT",
+            "   ": "",
+        }
+        for query, expected_name in cases.items():
+            with self.subTest(query=query):
+                self.memory_exporter.clear()
+                conn, state = self._make_prepared_stmt_conn()
+                apg = AsyncPGInstrumentor()
+                apg.instrument(tracer_provider=self.tracer_provider)
+
+                stmt = PreparedStatement(conn, query, state)
+                asyncio.run(stmt.fetch())
+                apg.uninstrument()
+
+                spans = self.memory_exporter.get_finished_spans()
+                self.assertEqual(len(spans), 1)
+                self.assertEqual(spans[0].name, expected_name)
+
     def test_prepared_statement_error_span(self):
         async def bind_execute_error(*args, **kwargs):
             raise RuntimeError("db error")
@@ -396,6 +420,27 @@ class TestAsyncPGSemconvMigration(TestBase):
         self.assertEqual(span.attributes[NET_PEER_NAME], "testhost")
         self.assertEqual(span.attributes[NET_PEER_PORT], 5432)
         self.assertEqual(span.attributes[DB_STATEMENT], "SELECT 1")
+
+    def test_span_name_is_first_token(self):
+        bulk_insert = "INSERT INTO t (v) VALUES " + ", ".join(
+            f"(${i})" for i in range(1, 1001)
+        )
+        cases = {
+            "SELECT 1": "SELECT",
+            "  \n\tSELECT\n  *\nFROM t": "SELECT",
+            "/* leading comment */ UPDATE t SET v = $1": "UPDATE",
+            bulk_insert: "INSERT",
+            "   \n": "",
+            "/* only a comment */": "",
+        }
+        for query, expected_name in cases.items():
+            with self.subTest(query=query[:40]):
+                self.memory_exporter.clear()
+                spans = self._run_execute(self._make_execute_conn(), query)
+                AsyncPGInstrumentor().uninstrument()
+
+                self.assertEqual(len(spans), 1)
+                self.assertEqual(spans[0].name, expected_name)
 
     def test_span_database_only_new_semconv(self):
         with use_semconv_opt_in("database"):
