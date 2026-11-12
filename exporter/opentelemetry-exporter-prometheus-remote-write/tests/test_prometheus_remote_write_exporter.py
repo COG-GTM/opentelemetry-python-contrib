@@ -309,7 +309,7 @@ def test_valid_send_message(mock_post, prom_rw):
 
 
 @patch("requests.post")
-@patch("requests.Session.post")
+@patch("requests.Session.post", autospec=True)
 def test_send_message_reuses_session(mock_session_post, mock_post, prom_rw):
     mock_session_post.return_value.configure_mock(**{"ok": True})
     session = prom_rw._session
@@ -317,8 +317,9 @@ def test_send_message_reuses_session(mock_session_post, mock_post, prom_rw):
     assert prom_rw._send_message(bytes(), {}) == MetricExportResult.SUCCESS
     assert prom_rw._send_message(bytes(), {}) == MetricExportResult.SUCCESS
 
-    assert prom_rw._session is session
     assert mock_session_post.call_count == 2
+    for call in mock_session_post.call_args_list:
+        assert call.args[0] is session
     mock_post.assert_not_called()
 
 
