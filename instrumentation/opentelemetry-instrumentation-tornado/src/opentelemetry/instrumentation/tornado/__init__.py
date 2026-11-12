@@ -150,7 +150,7 @@ from functools import partial
 from logging import getLogger
 from time import time_ns
 from timeit import default_timer
-from typing import Collection, Dict
+from typing import Collection, Dict, List, Tuple
 
 import tornado.web
 import tornado.websocket
@@ -248,6 +248,9 @@ _START_TIME = "start_time"
 
 _excluded_urls = get_excluded_urls("TORNADO")
 _traced_request_attrs = get_traced_request_attrs("TORNADO")
+# (header name, span attribute key) pairs, resolved once in _instrument.
+_captured_request_headers: List[Tuple[str, str]] = []
+_captured_response_headers: List[Tuple[str, str]] = []
 response_propagation_setter = FuncSetter(tornado.web.RequestHandler.add_header)
 
 
@@ -288,6 +291,16 @@ class TornadoInstrumentor(BaseInstrumentor):
             _OpenTelemetryStabilitySignalType.HTTP,
         )
         self._sem_conv_opt_in_mode = sem_conv_opt_in_mode
+
+        global _captured_request_headers, _captured_response_headers  # pylint: disable=global-statement
+        _captured_request_headers = _resolve_captured_headers(
+            OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST,
+            normalise_request_header_name,
+        )
+        _captured_response_headers = _resolve_captured_headers(
+            OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE,
+            normalise_response_header_name,
+        )
 
         tracer_provider = kwargs.get("tracer_provider")
         tracer = trace.get_tracer(
@@ -373,6 +386,10 @@ class TornadoInstrumentor(BaseInstrumentor):
 
     def _uninstrument(self, **kwargs):
         self._sem_conv_opt_in_mode = _StabilityMode.DEFAULT
+
+        global _captured_request_headers, _captured_response_headers  # pylint: disable=global-statement
+        _captured_request_headers = []
+        _captured_response_headers = []
 
         unwrap(tornado.web.RequestHandler, "__init__")
         unwrap(tornado.httpclient.AsyncHTTPClient, "fetch")
@@ -638,30 +655,32 @@ def _log_exception(
     return func(*args, **kwargs)
 
 
-def _collect_custom_request_headers_attributes(request_headers):
-    custom_request_headers_name = get_custom_headers(
-        OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST
-    )
+def _resolve_captured_headers(env_var, normalise):
+    return [
+        (header_name, normalise(header_name.lower()))
+        for header_name in get_custom_headers(env_var)
+    ]
+
+
+def _collect_custom_headers_attributes(headers, captured_headers):
     attributes = {}
-    for header_name in custom_request_headers_name:
-        header_values = request_headers.get(header_name)
+    for header_name, key in captured_headers:
+        header_values = headers.get(header_name)
         if header_values:
-            key = normalise_request_header_name(header_name.lower())
             attributes[key] = [header_values]
     return attributes
+
+
+def _collect_custom_request_headers_attributes(request_headers):
+    return _collect_custom_headers_attributes(
+        request_headers, _captured_request_headers
+    )
 
 
 def _collect_custom_response_headers_attributes(response_headers):
-    custom_response_headers_name = get_custom_headers(
-        OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE
+    return _collect_custom_headers_attributes(
+        response_headers, _captured_response_headers
     )
-    attributes = {}
-    for header_name in custom_response_headers_name:
-        header_values = response_headers.get(header_name)
-        if header_values:
-            key = normalise_response_header_name(header_name.lower())
-            attributes[key] = [header_values]
-    return attributes
 
 
 def _get_attributes_from_request(request, sem_conv_opt_in_mode):
