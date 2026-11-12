@@ -334,6 +334,13 @@ def _instrument(
     tracer_provider: TracerProvider = None,
     meter_provider: MeterProvider = None,
 ):
+    tracer = get_tracer(
+        __name__,
+        __version__,
+        tracer_provider,
+        schema_url="https://opentelemetry.io/schemas/1.11.0",
+    )
+
     # pylint: disable=too-many-locals
     # pylint: disable=too-many-statements
     def _instrumented_lambda_handler_call(  # noqa pylint: disable=too-many-branches
@@ -345,13 +352,6 @@ def _instrument(
         parent_context = _determine_parent_context(
             lambda_event,
             event_context_extractor,
-        )
-
-        tracer = get_tracer(
-            __name__,
-            __version__,
-            tracer_provider,
-            schema_url="https://opentelemetry.io/schemas/1.11.0",
         )
 
         token = context_api.attach(parent_context)
