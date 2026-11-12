@@ -256,6 +256,8 @@ class BaseTestCases:
             span = self.assert_span()
             self.assertEqual(span.attributes[HTTP_URL], self.URL)
             request = extract_mock.call_args.args[0][0]
+            if not isinstance(request, httpx.Request):
+                self.skipTest("httpx < 0.20 passes the URL as a raw tuple")
             self.assertIs(apply_mock.call_args.args[2], request.url)
             self.assertEqual(apply_mock.call_args.args[9], self.URL)
 
