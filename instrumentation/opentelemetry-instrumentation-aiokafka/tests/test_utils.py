@@ -115,6 +115,7 @@ class TestUtils(IsolatedAsyncioTestCase):
         original_send_callback = mock.AsyncMock()
         kafka_producer = mock.MagicMock()
         expected_span_name = _get_span_name("send", self.topic_name)
+        extract_bootstrap_servers.return_value = ["host1:9092", "host2:9092"]
 
         wrapped_send = _wrap_send(tracer, produce_hook)
         retval = await wrapped_send(
@@ -134,7 +135,7 @@ class TestUtils(IsolatedAsyncioTestCase):
         span = tracer.start_as_current_span().__enter__.return_value
         enrich_span.assert_called_once_with(
             span,
-            bootstrap_servers=extract_bootstrap_servers.return_value,
+            server_address='["host1:9092", "host2:9092"]',
             client_id=kafka_producer.client._client_id,
             topic=self.topic_name,
             partition=extract_send_partition.return_value,
@@ -179,6 +180,7 @@ class TestUtils(IsolatedAsyncioTestCase):
         consume_hook = mock.AsyncMock()
         original_getone_callback = mock.AsyncMock()
         kafka_consumer = mock.MagicMock()
+        extract_bootstrap_servers.return_value = ["host1:9092", "host2:9092"]
 
         wrapped_getone = _wrap_getone(tracer, consume_hook)
         record = await wrapped_getone(
@@ -188,7 +190,7 @@ class TestUtils(IsolatedAsyncioTestCase):
         extract_bootstrap_servers.assert_called_once_with(
             kafka_consumer._client
         )
-        bootstrap_servers = extract_bootstrap_servers.return_value
+        server_address = '["host1:9092", "host2:9092"]'
 
         extract_client_id.assert_called_once_with(kafka_consumer._client)
         client_id = extract_client_id.return_value
@@ -211,7 +213,7 @@ class TestUtils(IsolatedAsyncioTestCase):
             consume_hook,
             record,
             context,
-            bootstrap_servers,
+            server_address,
             client_id,
             consumer_group,
             self.args,
@@ -260,6 +262,7 @@ class TestUtils(IsolatedAsyncioTestCase):
         )
         kafka_consumer = mock.MagicMock()
         _create_consumer_span.return_value = mock.MagicMock()
+        extract_bootstrap_servers.return_value = ["host1:9092", "host2:9092"]
 
         wrapped_getmany = _wrap_getmany(tracer, consume_hook)
         records = await wrapped_getmany(
@@ -269,7 +272,7 @@ class TestUtils(IsolatedAsyncioTestCase):
         extract_bootstrap_servers.assert_called_once_with(
             kafka_consumer._client
         )
-        bootstrap_servers = extract_bootstrap_servers.return_value
+        server_address = '["host1:9092", "host2:9092"]'
 
         extract_client_id.assert_called_once_with(kafka_consumer._client)
         client_id = extract_client_id.return_value
@@ -292,7 +295,7 @@ class TestUtils(IsolatedAsyncioTestCase):
             consume_hook,
             record_mock,
             context,
-            bootstrap_servers,
+            server_address,
             client_id,
             consumer_group,
             self.args,
@@ -314,7 +317,7 @@ class TestUtils(IsolatedAsyncioTestCase):
     ) -> None:
         tracer = mock.MagicMock()
         consume_hook = mock.AsyncMock()
-        bootstrap_servers = mock.MagicMock()
+        server_address = mock.MagicMock()
         extracted_context = mock.MagicMock()
         record = mock.MagicMock()
         client_id = mock.MagicMock()
@@ -325,7 +328,7 @@ class TestUtils(IsolatedAsyncioTestCase):
             consume_hook,
             record,
             extracted_context,
-            bootstrap_servers,
+            server_address,
             client_id,
             consumer_group,
             self.args,
@@ -345,7 +348,7 @@ class TestUtils(IsolatedAsyncioTestCase):
 
         enrich_span.assert_called_once_with(
             span,
-            bootstrap_servers=bootstrap_servers,
+            server_address=server_address,
             client_id=client_id,
             consumer_group=consumer_group,
             topic=record.topic,
