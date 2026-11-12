@@ -323,7 +323,9 @@ class CursorTracer(dbapi.CursorTracer):
 
         if isinstance(statement, str):
             # Strip leading comments so we get the operation name.
-            return self._leading_comment_remover.sub("", statement).split()[0]
+            return self._leading_comment_remover.sub("", statement).split(
+                maxsplit=1
+            )[0]
 
         return ""
 

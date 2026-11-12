@@ -2,13 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import types
+from typing import Any
 from unittest import mock
 
 import psycopg2
+import psycopg2.sql
 
 import opentelemetry.instrumentation.psycopg2
 from opentelemetry import trace
-from opentelemetry.instrumentation.psycopg2 import Psycopg2Instrumentor
+from opentelemetry.instrumentation.psycopg2 import (
+    CursorTracer,
+    Psycopg2Instrumentor,
+)
 from opentelemetry.sdk import resources
 from opentelemetry.test.test_base import TestBase
 
@@ -129,6 +134,53 @@ class TestPostgresqlIntegration(TestBase):
         self.assertEqual(spans_list[3].name, "query")
         self.assertEqual(spans_list[4].name, "query")
         self.assertEqual(spans_list[5].name, "query")
+
+    def test_span_name_first_token_of_long_statement(self) -> None:
+        Psycopg2Instrumentor().instrument()
+
+        cnx = psycopg2.connect(database="test")
+
+        cursor = cnx.cursor()
+
+        values = ", ".join(f"({idx}, 'value {idx}')" for idx in range(1000))
+        cursor.execute(f"\n\t  INSERT INTO test (id, val) VALUES {values}")
+        cursor.execute(
+            f"/* leading comment */\nINSERT INTO test VALUES {values}"
+        )
+        cursor.execute(
+            psycopg2.sql.SQL(" ").join(
+                [
+                    psycopg2.sql.SQL("/* leading comment */ UPDATE"),
+                    psycopg2.sql.SQL("test SET val = 1"),
+                ]
+            )
+        )
+        spans_list = self.memory_exporter.get_finished_spans()
+        self.assertEqual(len(spans_list), 3)
+        self.assertEqual(spans_list[0].name, "INSERT")
+        self.assertEqual(spans_list[1].name, "INSERT")
+        self.assertEqual(spans_list[2].name, "UPDATE")
+
+    def test_get_operation_name_splits_only_first_token(self) -> None:
+        tracer = CursorTracer(mock.Mock())
+        split_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+        class RecordingStr(str):
+            def split(self, *args: Any, **kwargs: Any) -> list[str]:
+                split_calls.append((args, kwargs))
+                return super().split(*args, **kwargs)
+
+        statement = "INSERT INTO test VALUES (1, 'a'), (2, 'b')"
+        # pylint: disable=protected-access
+        tracer._leading_comment_remover = mock.Mock()
+        tracer._leading_comment_remover.sub.return_value = RecordingStr(
+            statement
+        )
+
+        self.assertEqual(
+            tracer.get_operation_name(mock.Mock(), (statement,)), "INSERT"
+        )
+        self.assertEqual(split_calls, [((), {"maxsplit": 1})])
 
     # pylint: disable=unused-argument
     def test_not_recording(self):
