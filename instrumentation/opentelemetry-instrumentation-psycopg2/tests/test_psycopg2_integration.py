@@ -131,7 +131,7 @@ class TestPostgresqlIntegration(TestBase):
         self.assertEqual(spans_list[4].name, "query")
         self.assertEqual(spans_list[5].name, "query")
 
-    def test_span_name_first_token_of_long_statement(self):
+    def test_span_name_first_token_of_long_statement(self) -> None:
         Psycopg2Instrumentor().instrument()
 
         cnx = psycopg2.connect(database="test")
