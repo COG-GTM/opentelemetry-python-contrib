@@ -777,6 +777,52 @@ class TestAsgiApplication(AsyncAsgiTestBase):
         outputs = await self.get_all_output()
         self.validate_outputs(outputs, modifiers=[update_expected_server])
 
+    async def test_request_headers_decoded_once(self):
+        trace_id = "0af7651916cd43dd8448eb211c80319c"
+        parent_span_id = "b7ad6b7169203331"
+        self.scope["headers"].extend(
+            [
+                [b"host", b"example.com"],
+                [b"user-agent", b"test-agent"],
+                [
+                    b"traceparent",
+                    f"00-{trace_id}-{parent_span_id}-01".encode(),
+                ],
+            ]
+        )
+        app = otel_asgi.OpenTelemetryMiddleware(simple_asgi)
+        self.seed_app(app)
+        with mock.patch.object(
+            otel_asgi,
+            "_decode_header_item",
+            wraps=otel_asgi._decode_header_item,
+        ) as decode:
+            await self.send_default_request()
+            await self.get_all_output()
+
+        decoded = [call.args[0] for call in decode.call_args_list]
+        for header in (b"host", b"user-agent", b"traceparent"):
+            self.assertEqual(decoded.count(header), 1, header)
+
+        server_span = next(
+            span
+            for span in self.get_finished_spans()
+            if span.kind == trace_api.SpanKind.SERVER
+        )
+        self.assertEqual(
+            format_trace_id(server_span.context.trace_id), trace_id
+        )
+        self.assertEqual(
+            format_span_id(server_span.parent.span_id), parent_span_id
+        )
+        self.assertEqual(
+            server_span.attributes[HTTP_SERVER_NAME], "example.com"
+        )
+        self.assertEqual(
+            server_span.attributes[HTTP_URL], "http://example.com/"
+        )
+        self.assertEqual(server_span.attributes[HTTP_USER_AGENT], "test-agent")
+
     async def test_behavior_with_scope_server_as_none_new_semconv(self):
         """Test that middleware is ok when server is none in scope."""
 

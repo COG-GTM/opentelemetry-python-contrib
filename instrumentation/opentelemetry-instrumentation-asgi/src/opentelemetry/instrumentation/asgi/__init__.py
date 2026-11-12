@@ -322,6 +322,41 @@ class ASGIGetter(Getter[dict]):
 asgi_getter = ASGIGetter()
 
 
+class _RequestHeaders:
+    """Request headers of an ASGI scope, decoded once per request."""
+
+    __slots__ = ("names", "_values")
+
+    def __init__(self, scope: typing.Mapping[str, Any]) -> None:
+        self.names: list[str] = []
+        self._values: dict[str, list[str]] = {}
+        for key, value in scope.get("headers") or ():
+            name = _decode_header_item(key)
+            self.names.append(name)
+            self._values.setdefault(name.lower(), []).append(
+                _decode_header_item(value)
+            )
+
+    def get(self, key: str) -> typing.Optional[typing.List[str]]:
+        values = self._values.get(key.lower())
+        if not values:
+            return None
+        return list(values)
+
+
+class _RequestHeadersGetter(Getter[_RequestHeaders]):
+    def get(
+        self, carrier: _RequestHeaders, key: str
+    ) -> typing.Optional[typing.List[str]]:
+        return carrier.get(key)
+
+    def keys(self, carrier: _RequestHeaders) -> typing.List[str]:
+        return list(carrier.names)
+
+
+_request_headers_getter = _RequestHeadersGetter()
+
+
 class ASGISetter(Setter[dict]):
     def set(self, carrier: dict, key: str, value: str) -> None:  # pylint: disable=no-self-use
         """Sets response header values on an ASGI scope according to `the spec <https://asgi.readthedocs.io/en/latest/specs/www.html#response-start-send-event>`_.
@@ -346,11 +381,22 @@ asgi_setter = ASGISetter()
 
 # pylint: disable=too-many-branches
 def collect_request_attributes(
-    scope, sem_conv_opt_in_mode=_StabilityMode.DEFAULT
+    scope,
+    sem_conv_opt_in_mode=_StabilityMode.DEFAULT,
+    *,
+    _request_headers: typing.Optional[_RequestHeaders] = None,
+    _host_port_url: typing.Optional[tuple[str, Any, str]] = None,
 ):
     """Collects HTTP request attributes from the ASGI scope and returns a
     dictionary to be used as span creation attributes."""
-    server_host, port, http_url = get_host_port_url_tuple(scope)
+    request_headers = (
+        _request_headers
+        if _request_headers is not None
+        else _RequestHeaders(scope)
+    )
+    server_host, port, http_url = _host_port_url or get_host_port_url_tuple(
+        scope, _request_headers=request_headers
+    )
     query_string = scope.get("query_string")
     if query_string and http_url:
         if isinstance(query_string, bytes):
@@ -389,11 +435,11 @@ def collect_request_attributes(
             sem_conv_opt_in_mode,
         )
 
-    http_host_value_list = asgi_getter.get(scope, "host")
+    http_host_value_list = request_headers.get("host")
     if http_host_value_list:
         if _report_old(sem_conv_opt_in_mode):
             result[HTTP_SERVER_NAME] = ",".join(http_host_value_list)
-    http_user_agent = asgi_getter.get(scope, "user-agent")
+    http_user_agent = request_headers.get("user-agent")
     if http_user_agent:
         user_agent_raw = http_user_agent[0]
         user_agent_value = normalize_user_agent(user_agent_raw)
@@ -449,12 +495,17 @@ def collect_custom_headers_attributes(
     )
 
 
-def get_host_port_url_tuple(scope):
+def get_host_port_url_tuple(
+    scope, *, _request_headers: typing.Optional[_RequestHeaders] = None
+):
     """Returns (host, port, full_url) tuple."""
     server = scope.get("server") or ["0.0.0.0", 80]
     port = server[1]
 
-    host_header = asgi_getter.get(scope, "host")
+    if _request_headers is not None:
+        host_header = _request_headers.get("host")
+    else:
+        host_header = asgi_getter.get(scope, "host")
     if host_header:
         host_value = host_header[0]
         # Ensure host_value is a string, not bytes
@@ -743,22 +794,29 @@ class OpenTelemetryMiddleware:
         ):
             return await self.app(scope, receive, send)
 
-        _, _, url = get_host_port_url_tuple(scope)
+        request_headers = _RequestHeaders(scope)
+        host_port_url = get_host_port_url_tuple(
+            scope, _request_headers=request_headers
+        )
+        url = host_port_url[2]
         if self.excluded_urls and self.excluded_urls.url_disabled(url):
             return await self.app(scope, receive, send)
 
         span_name, additional_attributes = self.default_span_details(scope)
 
         attributes = collect_request_attributes(
-            scope, self._sem_conv_opt_in_mode
+            scope,
+            self._sem_conv_opt_in_mode,
+            _request_headers=request_headers,
+            _host_port_url=host_port_url,
         )
         attributes.update(additional_attributes)
         span, token = _start_internal_or_server_span(
             tracer=self.tracer,
             span_name=span_name,
             start_time=None,
-            context_carrier=scope,
-            context_getter=asgi_getter,
+            context_carrier=request_headers,
+            context_getter=_request_headers_getter,
             attributes=attributes,
         )
         active_requests_count_attrs = _parse_active_request_count_attrs(
