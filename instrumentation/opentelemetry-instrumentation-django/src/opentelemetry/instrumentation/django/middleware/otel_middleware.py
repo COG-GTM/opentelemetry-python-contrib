@@ -343,7 +343,14 @@ class _DjangoMiddleware:
                     sem_conv_opt_in_mode=self._sem_conv_opt_in_mode,
                 )
 
-                if span.is_recording() and span.kind == SpanKind.SERVER:
+                captured_response_headers = (
+                    get_custom_headers(
+                        OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE
+                    )
+                    if span.is_recording() and span.kind == SpanKind.SERVER
+                    else None
+                )
+                if captured_response_headers:
                     custom_headers = {}
                     for key, value in response.items():
                         asgi_setter.set(custom_headers, key, value)
@@ -355,9 +362,7 @@ class _DjangoMiddleware:
                                 OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS
                             )
                         ),
-                        get_custom_headers(
-                            OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE
-                        ),
+                        captured_response_headers,
                         normalise_response_header_name,
                     )
                     for key, value in custom_res_attributes.items():

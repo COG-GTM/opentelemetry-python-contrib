@@ -446,6 +446,12 @@ def collect_custom_response_headers_attributes(
     https://github.com/open-telemetry/semantic-conventions/blob/main/docs/http/http-spans.md#http-server-span
     """
 
+    captured_headers = get_custom_headers(
+        OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE
+    )
+    if not captured_headers:
+        return {}
+
     sanitize = SanitizeValue(
         get_custom_headers(
             OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS
@@ -462,9 +468,7 @@ def collect_custom_response_headers_attributes(
 
     return sanitize.sanitize_header_values(
         response_headers_dict,
-        get_custom_headers(
-            OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE
-        ),
+        captured_headers,
         normalise_response_header_name,
     )
 
