@@ -1118,6 +1118,24 @@ class GenAISemanticProcessor(TracingProcessor):
             current = self._span_parents.get(current)
         return None
 
+    @staticmethod
+    def _consumes_content(otel_span: Optional[OtelSpan]) -> bool:
+        """Whether span end will use content for this OTel span."""
+        if otel_span is None:
+            return logger.isEnabledFor(logging.DEBUG)
+        return otel_span.is_recording()
+
+    def _needs_content(
+        self, span: Span[Any], otel_span: Optional[OtelSpan]
+    ) -> bool:
+        """Whether this span or its parent agent span will use its content."""
+        if self._consumes_content(otel_span):
+            return True
+        agent_id = self._find_agent_parent_span_id(span.parent_id)
+        if not agent_id:
+            return False
+        return self._consumes_content(self._otel_spans.get(agent_id))
+
     def _update_agent_aggregate(
         self, span: Span[Any], payload: ContentPayload
     ) -> None:
@@ -1406,8 +1424,11 @@ class GenAISemanticProcessor(TracingProcessor):
         if token := self._tokens.pop(span.span_id, None):
             detach(token)
 
-        payload = self._build_content_payload(span)
-        self._update_agent_aggregate(span, payload)
+        if self._needs_content(span, self._otel_spans.get(span.span_id)):
+            payload = self._build_content_payload(span)
+            self._update_agent_aggregate(span, payload)
+        else:
+            payload = ContentPayload()
         agent_content = (
             self._agent_content.get(span.span_id)
             if _is_instance_of(span.span_data, AgentSpanData)
@@ -1746,13 +1767,18 @@ class GenAISemanticProcessor(TracingProcessor):
         existing: list[Any],
         incoming: Sequence[Any],
     ) -> list[Any]:
-        """Merge normalized message/content lists without duplicating snapshots."""
+        """Merge normalized message/content lists without duplicating snapshots.
+
+        ``existing`` is owned by the processor and updated in place; only
+        appended or replaced messages are cloned.
+        """
         if not incoming:
             return existing
 
-        incoming_list = [self._clone_message(item) for item in incoming]
+        sensitive = self.include_sensitive_data
+        incoming_list = list(incoming)
 
-        if self.include_sensitive_data:
+        if sensitive:
             filtered = [
                 msg
                 for msg in incoming_list
@@ -1762,36 +1788,34 @@ class GenAISemanticProcessor(TracingProcessor):
                 incoming_list = filtered
 
         if not existing:
-            return incoming_list
+            return [self._clone_message(item) for item in incoming_list]
 
-        result = [self._clone_message(item) for item in existing]
+        has_real_message = sensitive and any(
+            not self._is_placeholder_message(msg) for msg in existing
+        )
 
         for idx, new_msg in enumerate(incoming_list):
-            if idx < len(result):
-                if (
-                    self.include_sensitive_data
-                    and self._is_placeholder_message(new_msg)
-                    and not self._is_placeholder_message(result[idx])
+            is_placeholder = sensitive and self._is_placeholder_message(
+                new_msg
+            )
+            if idx < len(existing):
+                if is_placeholder and not self._is_placeholder_message(
+                    existing[idx]
                 ):
                     continue
-                if result[idx] != new_msg:
-                    result[idx] = self._clone_message(new_msg)
+                if existing[idx] == new_msg:
+                    continue
+                existing[idx] = self._clone_message(new_msg)
             else:
-                if (
-                    self.include_sensitive_data
-                    and self._is_placeholder_message(new_msg)
+                if is_placeholder and (
+                    has_real_message or new_msg in existing
                 ):
-                    if (
-                        any(
-                            not self._is_placeholder_message(existing_msg)
-                            for existing_msg in result
-                        )
-                        or new_msg in result
-                    ):
-                        continue
-                result.append(self._clone_message(new_msg))
+                    continue
+                existing.append(self._clone_message(new_msg))
+            if not is_placeholder:
+                has_real_message = True
 
-        return result
+        return existing
 
     def _clone_message(self, message: Any) -> Any:
         if isinstance(message, dict):

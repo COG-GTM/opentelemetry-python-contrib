@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -23,10 +24,15 @@ from agents.tracing import (
 
 import opentelemetry.semconv._incubating.attributes.gen_ai_attributes as _gen_ai_attributes
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.sampling import ALWAYS_OFF
 from opentelemetry.semconv._incubating.attributes import (
     server_attributes as _server_attributes,
 )
-from opentelemetry.trace import SpanKind
+from opentelemetry.trace import (
+    INVALID_SPAN_CONTEXT,
+    NonRecordingSpan,
+    SpanKind,
+)
 from opentelemetry.trace.status import StatusCode
 
 
@@ -538,3 +544,131 @@ def test_chat_span_renamed_with_model(processor_setup):
 
     span_names = {span.name for span in exporter.get_finished_spans()}
     assert "chat gpt-4o" in span_names
+
+
+def _start_agent_with_generation(processor, trace_id: str):
+    trace = FakeTrace(name="workflow", trace_id=trace_id)
+    processor.on_trace_start(trace)
+    agent = FakeSpan(
+        trace_id=trace_id,
+        span_id="agent-span",
+        span_data=AgentSpanData(name="agent"),
+        started_at="2025-01-01T00:00:00Z",
+        ended_at="2025-01-01T00:00:02Z",
+    )
+    processor.on_span_start(agent)
+    generation = FakeSpan(
+        trace_id=trace_id,
+        span_id="generation-span",
+        parent_id=agent.span_id,
+        span_data=GenerationSpanData(
+            input=[{"role": "user", "content": "question"}],
+            output=[{"role": "assistant", "content": "answer"}],
+            model="gpt-4o",
+        ),
+        started_at="2025-01-01T00:00:00Z",
+        ended_at="2025-01-01T00:00:01Z",
+    )
+    processor.on_span_start(generation)
+    return trace, agent, generation
+
+
+def test_unsampled_spans_skip_content_work(monkeypatch):
+    provider = TracerProvider(sampler=ALWAYS_OFF)
+    processor = sp.GenAISemanticProcessor(
+        tracer=provider.get_tracer(__name__), system_name="openai"
+    )
+
+    def _fail(*_args, **_kwargs):
+        raise AssertionError("content payload built for unsampled span")
+
+    monkeypatch.setattr(processor, "_build_content_payload", _fail)
+    _, agent, generation = _start_agent_with_generation(processor, "trace-u")
+
+    processor.on_span_end(generation)
+
+    assert processor._agent_content[agent.span_id]["input_messages"] == []
+    processor.on_span_end(agent)
+    assert agent.span_id not in processor._agent_content
+    processor.shutdown()
+
+
+def test_missing_otel_span_logs_content_only_at_debug(
+    processor_setup, monkeypatch, caplog
+):
+    processor, _ = processor_setup
+    _, _, generation = _start_agent_with_generation(processor, "trace-d")
+    processor._otel_spans.pop(generation.span_id).end()
+    processor._otel_spans.pop("agent-span").end()
+    built = []
+    original = processor._build_content_payload
+    monkeypatch.setattr(
+        processor,
+        "_build_content_payload",
+        lambda span: built.append(span.span_id) or original(span),
+    )
+
+    with caplog.at_level(logging.INFO, logger=sp.logger.name):
+        processor.on_span_end(generation)
+    assert not built
+
+    with caplog.at_level(logging.DEBUG, logger=sp.logger.name):
+        processor.on_span_end(generation)
+    assert built == [generation.span_id]
+    logged = [
+        record.getMessage()
+        for record in caplog.records
+        if "gen_ai.input.messages=" in record.getMessage()
+    ]
+    assert logged and "question" in logged[0]
+
+
+def test_unsampled_child_still_feeds_recording_agent(processor_setup):
+    processor, exporter = processor_setup
+    trace, agent, generation = _start_agent_with_generation(
+        processor, "trace-r"
+    )
+    processor._otel_spans[generation.span_id] = NonRecordingSpan(
+        INVALID_SPAN_CONTEXT
+    )
+
+    processor.on_span_end(generation)
+    processor.on_span_end(agent)
+    processor.on_trace_end(trace)
+
+    agent_span = next(
+        span
+        for span in exporter.get_finished_spans()
+        if span.name == "invoke_agent agent"
+    )
+    input_raw = agent_span.attributes["gen_ai.input.messages"]
+    output_raw = agent_span.attributes["gen_ai.output.messages"]
+    assert isinstance(input_raw, str)
+    assert isinstance(output_raw, str)
+    assert json.loads(input_raw) == [
+        {"role": "user", "parts": [{"type": "text", "content": "question"}]}
+    ]
+    output_messages = json.loads(output_raw)
+    assert [msg["parts"] for msg in output_messages] == [
+        [{"type": "text", "content": "answer"}]
+    ]
+
+
+def test_merge_content_sequence_extends_existing_in_place():
+    processor = sp.GenAISemanticProcessor(metrics_enabled=False)
+    history = [
+        {"role": "user", "parts": [{"type": "text", "content": "hi"}]},
+    ]
+    aggregate = processor._merge_content_sequence([], history)
+    first = aggregate[0]
+    assert first == history[0] and first is not history[0]
+
+    history.append(
+        {"role": "assistant", "parts": [{"type": "text", "content": "yo"}]}
+    )
+    merged = processor._merge_content_sequence(aggregate, history)
+
+    assert merged is aggregate
+    assert merged == history
+    assert merged[0] is first
+    assert merged[1] is not history[1]
