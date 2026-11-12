@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-aiopg`: define the traced connection, pool and cursor proxy classes once at module level instead of creating a new class on every pool acquire and cursor
