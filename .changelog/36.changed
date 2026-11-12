@@ -1,0 +1,1 @@
+`opentelemetry-instrumentation-asyncpg`: derive span names with `split(maxsplit=1)` instead of tokenizing the whole SQL statement
